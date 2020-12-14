@@ -21,8 +21,8 @@ from scapy.all import ShortField, IntField, LongField, BitField, FieldListField,
 from scapy.all import IP, UDP, Raw, ls, TCP
 from scapy.layers.inet import _IPOption_HDR
 
-BUFFER_PAUSE_THRESHOLD = 5
-BUFFER_RESUME_THRESHOLD = 1
+BUFFER_PAUSE_THRESHOLD = 10
+BUFFER_RESUME_THRESHOLD = 0
 
 TYPE_CUSTOM = 0x1010
 TYPE_PAUSE = 0x1111
@@ -41,7 +41,7 @@ bind_layers(Ether, IP, type=TYPE_PAUSE)
 bind_layers(Ether, IP, type=TYPE_RESUME)
 
 # list of cpu interfaces
-cpu_interfaces = ['s1-cpu-eth1', 's2-cpu-eth1']
+cpu_interfaces = ['s1-cpu-eth1', 's2-cpu-eth1', 's3-cpu-eth1']
 
 # buffer stores mapping from port to array of packets
 cpu_buffer_size = {}

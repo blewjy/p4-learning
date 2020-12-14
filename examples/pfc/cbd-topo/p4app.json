@@ -25,16 +25,32 @@
     "object_name": "P4Mininet"
   },
   "topology": {
-    "links": [["h1", "s1"], ["s1", "h2"]],
+    "links": [["h1", "s1"], ["h11", "s1"], ["h2", "s2"], ["h22", "s2"], ["h3", "s3"], ["s1", "s2"], ["s1", "s3"], ["s2", "s3"]],
     "hosts": {
       "h1": {
       },
       "h2": {
+      },
+      "h3": {
+      },
+      "h11":{
+      },
+      "h22":{
       }
     },
     "switches": {
       "s1": {
-        "cli_input": "s1-commands.txt",
+        "cli_input": "cbd-topo/s1-commands.txt",
+        "program": "copy_to_cpu.p4",
+        "cpu_port": true
+      },
+      "s2": {
+        "cli_input": "cbd-topo/s2-commands.txt",
+        "program": "copy_to_cpu.p4",
+        "cpu_port": true
+      },
+      "s3": {
+        "cli_input": "cbd-topo/s3-commands.txt",
         "program": "copy_to_cpu.p4",
         "cpu_port": true
       }

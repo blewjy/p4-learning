@@ -34,12 +34,12 @@
     },
     "switches": {
       "s1": {
-        "cli_input": "s1-commands.txt",
+        "cli_input": "simple-topo/s1-commands.txt",
         "program": "copy_to_cpu.p4",
         "cpu_port": true
       },
       "s2": {
-        "cli_input": "s2-commands.txt",
+        "cli_input": "simple-topo/s2-commands.txt",
         "program": "copy_to_cpu.p4",
         "cpu_port": true
       }
