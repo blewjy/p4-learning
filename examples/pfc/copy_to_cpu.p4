@@ -11,6 +11,7 @@ const bit<16> TYPE_PAUSE = 0x1111;
 const bit<16> TYPE_RESUME = 0x1212;
 
 register<bit<1>>(MAX_PORTS) is_port_paused;
+register<bit<1>>(MAX_PORTS) is_upstream_paused;
 
 /*************************************************************************
 *********************** H E A D E R S  ***********************************
@@ -51,8 +52,8 @@ struct metadata {
 }
 
 struct headers {
-  cpu_t        cpu;
   ethernet_t   ethernet;
+  cpu_t        cpu;
   ipv4_t       ipv4;
 }
 
@@ -70,10 +71,22 @@ parser MyParser(packet_in packet,
         transition select(hdr.ethernet.etherType){
             TYPE_IPV4: ipv4;
             TYPE_CUSTOM: ipv4;
-            TYPE_PAUSE: ipv4;
             TYPE_RESUME: ipv4;
+            TYPE_PAUSE: cpu;
             default: accept;
         }
+    }
+
+    state check_if_cpu {
+      transition select(standard_metadata.ingress_port) {
+        CPU_PORT: cpu;
+        default: ipv4;
+      }
+    }
+
+    state cpu {
+      packet.extract(hdr.cpu);
+      transition ipv4;
     }
 
     state ipv4 {
@@ -134,7 +147,9 @@ control MyIngress(inout headers hdr,
 
               if (standard_metadata.ingress_port == CPU_PORT) {
                 // If it's from CPU port, we forward it to specified port
-
+                standard_metadata.egress_spec = (bit<9>)hdr.cpu.ingress_port;
+                hdr.cpu.setInvalid();
+                is_upstream_paused.write((bit<32>)standard_metadata.egress_spec - 1, (bit<1>)1);
               } else {
                 // If it's from non-CPU port, we mark the ingress port as paused, then drop the packet
                 is_port_paused.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)1);
@@ -142,12 +157,19 @@ control MyIngress(inout headers hdr,
               }
 
             } else if (hdr.ethernet.etherType == TYPE_RESUME) {
-              // If you receive a resume packet, you should mark the ingress port as unpaused, then forward to CPU to release buffer.
-              is_port_paused.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)0);
-              hdr.cpu.setValid();
-              hdr.cpu.ingress_port = (bit<16>)standard_metadata.ingress_port;
-              hdr.cpu.egress_port = (bit<16>)standard_metadata.ingress_port;
-              standard_metadata.egress_spec = CPU_PORT;
+              // If you receive a resume packet, first check where it was from
+
+              if (standard_metadata.ingress_port == CPU_PORT) {
+                // If it's from CPU port, we multicast it
+                standard_metadata.mcast_grp = 1;
+              } else {
+                // If it's from a non-CPU port, you should mark the ingress port as unpaused, then forward to CPU to release buffer.
+                is_port_paused.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)0);
+                hdr.cpu.setValid();
+                hdr.cpu.ingress_port = (bit<16>)standard_metadata.ingress_port;
+                hdr.cpu.egress_port = (bit<16>)standard_metadata.ingress_port;
+                standard_metadata.egress_spec = CPU_PORT;
+              }
 
             } else if (hdr.ethernet.etherType == TYPE_CUSTOM) {
               // If you receive a custom packet, you should check if port is paused first.
@@ -172,7 +194,34 @@ control MyIngress(inout headers hdr,
 control MyEgress(inout headers hdr,
                  inout metadata meta,
                  inout standard_metadata_t standard_metadata) {
-    apply {}
+  
+    action drop() {
+      mark_to_drop(standard_metadata);
+    }
+
+    apply {
+      if (hdr.ethernet.isValid() && hdr.ethernet.etherType == TYPE_RESUME && standard_metadata.egress_port != CPU_PORT) {
+        if (standard_metadata.egress_port == (bit<9>)hdr.cpu.ingress_port) {
+          // If it's going out the same way the original resume came in, drop it.
+          drop();
+
+        } else {
+          // Otherwise, first unset the cpu header.
+          hdr.cpu.setInvalid();
+
+          // Then, send out resume packet to only paused upstreams
+          bit<1> paused;
+          is_upstream_paused.read(paused, (bit<32>)standard_metadata.egress_port - 1);
+          if (paused == (bit<1>)1) {
+            is_upstream_paused.write((bit<32>)standard_metadata.egress_port - 1, (bit<1>)0);
+          } else {
+            drop();
+          }
+          
+
+        }
+      }
+    }
 }
 
 /*************************************************************************
@@ -208,8 +257,8 @@ control MyDeparser(packet_out packet, in headers hdr) {
     apply {
 
         //parsed headers have to be added again into the packet.
-        packet.emit(hdr.cpu);
         packet.emit(hdr.ethernet);
+        packet.emit(hdr.cpu);
         packet.emit(hdr.ipv4);
 
     }
