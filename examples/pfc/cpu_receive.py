@@ -12,6 +12,7 @@ When CPU receives this control packet, it will then release.
 import sys
 import struct
 import os
+import socket
 import time
 
 from scapy.all import sniff, sendp, hexdump, get_if_list, get_if_hwaddr, bind_layers
@@ -38,74 +39,86 @@ bind_layers(CpuHeader, IP)
 bind_layers(Ether, IP, type=TYPE_CUSTOM)
 bind_layers(Ether, IP, type=TYPE_PAUSE)
 bind_layers(Ether, IP, type=TYPE_RESUME)
-count = 0
+
+# list of cpu interfaces
+cpu_interfaces = ['s1-cpu-eth1', 's2-cpu-eth1']
 
 # buffer stores mapping from port to array of packets
-cpu_buffer_size = 0
+cpu_buffer_size = {}
 cpu_buffer = {}
+for iface in cpu_interfaces:
+    cpu_buffer[iface] = {}
+    cpu_buffer_size[iface] = 0
 
 def show_cpu_buffer():
     global cpu_buffer
     print "buffer size:", cpu_buffer_size
-    print cpu_buffer
 
-def send_a_pause_packet(ingress_port, egress_port):
-    pause_pkt = Ether(src=get_if_hwaddr('s1-cpu-eth1'), dst="ff:ff:ff:ff:ff:ff", type=TYPE_PAUSE)
-    pause_pkt = pause_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port) / IP(dst="10.0.1.1") / UDP(dport=1234, sport=4321) / "pause"
+def send_a_pause_packet(iface, ingress_port, egress_port):
+    print "Sending a pause packet from {}, going out port {}".format(iface, ingress_port)
+    pause_pkt = Ether(src=get_if_hwaddr(iface), dst="ff:ff:ff:ff:ff:ff", type=TYPE_PAUSE)
+    pause_pkt = pause_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port) / IP(dst=socket.gethostbyname("10.0.1.1")) / UDP(dport=1234, sport=4321) / "pause"
     pause_pkt.show2()
-    sendp(pause_pkt, iface='s1-cpu-eth1', verbose=False)
+    sendp(pause_pkt, iface=iface, verbose=False)
 
-def send_a_resume_packet(ingress_port, egress_port):
-    pause_pkt = Ether(src=get_if_hwaddr('s1-cpu-eth1'), dst="ff:ff:ff:ff:ff:ff", type=TYPE_RESUME)
-    pause_pkt = pause_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port) / IP(dst="10.0.1.1") / UDP(dport=1234, sport=4321) / "resume"
-    pause_pkt.show2()
-    sendp(pause_pkt, iface='s1-cpu-eth1', verbose=False)
+def send_a_resume_packet(iface, ingress_port, egress_port):
+    print "Sending a resume packet from {}, going out port {}".format(iface, ingress_port)
+    resume_pkt = Ether(src=get_if_hwaddr(iface), dst="ff:ff:ff:ff:ff:ff", type=TYPE_RESUME)
+    resume_pkt = resume_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port) / IP(dst=socket.gethostbyname("10.0.1.1")) / UDP(dport=1234, sport=4321) / "resume"
+    resume_pkt.show2()
+    sendp(resume_pkt, iface=iface, verbose=False)
 
 def handle_pkt(pkt):
-    if not pkt.haslayer(CpuHeader) or not pkt.haslayer(UDP) or pkt[Ether].src == get_if_hwaddr('s1-cpu-eth1'):
+
+    iface = pkt.sniffed_on
+    print "Controller got a packet on {}".format(iface)
+
+    if not pkt.haslayer(CpuHeader) or not pkt.haslayer(UDP) or pkt[Ether].src == get_if_hwaddr(iface):
+        print "...but packet is rejected!!"
         return
 
-    global count, cpu_buffer, cpu_buffer_size
-    print "Controller got a packet", count
-    count += 1
+    global cpu_buffer, cpu_buffer_size
     pkt.show2()
     sys.stdout.flush()
 
     portno = pkt[CpuHeader].egress_port
-    if portno not in cpu_buffer:
-        cpu_buffer[portno] = []
+    if portno not in cpu_buffer[iface]:
+        cpu_buffer[iface][portno] = []
 
     if pkt[Ether].type == TYPE_RESUME:
-        for buffered_packet in cpu_buffer[portno]:
-            sendp(buffered_packet, iface='s1-cpu-eth1', verbose=False)
-        cpu_buffer_size -= len(cpu_buffer[portno])
-        del cpu_buffer[portno][:]
+        for buffered_packet in cpu_buffer[iface][portno]:
+            sendp(buffered_packet, iface=iface, verbose=False)
+        cpu_buffer_size[iface] -= len(cpu_buffer[iface][portno])
+        del cpu_buffer[iface][portno][:]
         show_cpu_buffer()
 
-        if cpu_buffer_size <= BUFFER_RESUME_THRESHOLD:
-            send_a_resume_packet(pkt[CpuHeader].ingress_port, pkt[CpuHeader].egress_port)
+        if cpu_buffer_size[iface] <= BUFFER_RESUME_THRESHOLD:
+            send_a_resume_packet(iface, pkt[CpuHeader].ingress_port, pkt[CpuHeader].egress_port)
 
     else:
         pkt2 = pkt.copy()
         pkt2[Ether].remove_payload()
         final_pkt = pkt2 / pkt[IP]
-        cpu_buffer[portno].append(final_pkt)
-        cpu_buffer_size += 1
+        cpu_buffer[iface][portno].append(final_pkt)
+        cpu_buffer_size[iface] += 1
         show_cpu_buffer()
 
-        if cpu_buffer_size >= BUFFER_PAUSE_THRESHOLD:
-            send_a_pause_packet(pkt[CpuHeader].ingress_port, pkt[CpuHeader].egress_port)
+        if cpu_buffer_size[iface] >= BUFFER_PAUSE_THRESHOLD:
+            send_a_pause_packet(iface, pkt[CpuHeader].ingress_port, pkt[CpuHeader].egress_port)
 
 
 def main():
-    if len(sys.argv) < 2:
-        iface = 's1-cpu-eth1'
-    else:
-        iface = sys.argv[1]
 
-    print "sniffing on %s" % iface
+    
+
+    global cpu_interfaces
+    if len(sys.argv)>1:
+        cpu_interfaces = sys.argv[1]
+    print "sniffing on %s" % cpu_interfaces
+    
+
     sys.stdout.flush()
-    sniff(iface = iface,
+    sniff(iface = cpu_interfaces,
           prn = lambda x: handle_pkt(x))
 
 if __name__ == '__main__':

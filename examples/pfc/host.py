@@ -91,6 +91,7 @@ class Receiver(threading.Thread):
             if pkt[Ether].src != get_if_hwaddr(iface):
                 if pkt[Ether].type == TYPE_CUSTOM:
                     print "Normal packet received!"
+                    pkt.show2()
                 elif pkt[Ether].type == TYPE_PAUSE:
                     print "Pause packet received!"
                     paused = True

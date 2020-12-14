@@ -71,8 +71,8 @@ parser MyParser(packet_in packet,
         transition select(hdr.ethernet.etherType){
             TYPE_IPV4: ipv4;
             TYPE_CUSTOM: ipv4;
-            TYPE_RESUME: ipv4;
-            TYPE_PAUSE: cpu;
+            TYPE_RESUME: check_if_cpu;
+            TYPE_PAUSE: check_if_cpu;
             default: accept;
         }
     }
@@ -90,8 +90,8 @@ parser MyParser(packet_in packet,
     }
 
     state ipv4 {
-        packet.extract(hdr.ipv4);
-        transition accept;
+      packet.extract(hdr.ipv4);
+      transition accept;
     }
 
 }

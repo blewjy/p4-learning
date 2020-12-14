@@ -25,7 +25,7 @@
     "object_name": "P4Mininet"
   },
   "topology": {
-    "links": [["h1", "s1"], ["s1", "s2"], ["s2", "h2"]],
+    "links": [["h1", "s1"], ["s1", "h2"]],
     "hosts": {
       "h1": {
       },
@@ -35,11 +35,6 @@
     "switches": {
       "s1": {
         "cli_input": "s1-commands.txt",
-        "program": "copy_to_cpu.p4",
-        "cpu_port": true
-      },
-      "s2": {
-        "cli_input": "s2-commands.txt",
         "program": "copy_to_cpu.p4",
         "cpu_port": true
       }
