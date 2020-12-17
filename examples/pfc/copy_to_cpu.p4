@@ -2,16 +2,18 @@
 #include <core.p4>
 #include <v1model.p4>
 
-#define CPU_PORT 24
+#define CPU_PORT  24
 #define MAX_PORTS 4
 
-const bit<16> TYPE_IPV4 = 0x800;
+const bit<16> TYPE_IPV4   = 0x800;
 const bit<16> TYPE_CUSTOM = 0x1010;
-const bit<16> TYPE_PAUSE = 0x1111;
+const bit<16> TYPE_PAUSE  = 0x1111;
 const bit<16> TYPE_RESUME = 0x1212;
 
-register<bit<1>>(MAX_PORTS) is_port_paused;
-register<bit<1>>(MAX_PORTS) is_upstream_paused;
+register<bit<1>>(MAX_PORTS)           is_port_paused;
+register<bit<1>>(MAX_PORTS)           is_upstream_paused;
+register<bit<32>>(5)                  deq_qdepth;
+register<bit<1>>(MAX_PORTS*MAX_PORTS) traffic_map;
 
 /*************************************************************************
 *********************** H E A D E R S  ***********************************
@@ -42,9 +44,12 @@ header ipv4_t {
   ip4Addr_t dstAddr;
 }
 
+// only packets that are exchanged with CPU have this header.
 header cpu_t {
   bit<16> ingress_port;
   bit<16> egress_port;
+  bit<8>  is_final;
+  bit<8>  from_cpu;
 }
 
 struct metadata {
@@ -70,7 +75,7 @@ parser MyParser(packet_in packet,
         packet.extract(hdr.ethernet);
         transition select(hdr.ethernet.etherType){
             TYPE_IPV4: ipv4;
-            TYPE_CUSTOM: ipv4;
+            TYPE_CUSTOM: check_if_cpu;
             TYPE_RESUME: check_if_cpu;
             TYPE_PAUSE: check_if_cpu;
             default: accept;
@@ -168,6 +173,7 @@ control MyIngress(inout headers hdr,
                 hdr.cpu.setValid();
                 hdr.cpu.ingress_port = (bit<16>)standard_metadata.ingress_port;
                 hdr.cpu.egress_port = (bit<16>)standard_metadata.ingress_port;
+                hdr.cpu.from_cpu = (bit<8>)0;
                 standard_metadata.egress_spec = CPU_PORT;
               }
 
@@ -176,11 +182,36 @@ control MyIngress(inout headers hdr,
               bit<1> paused;
               is_port_paused.read(paused, (bit<32>)standard_metadata.egress_spec - 1);
               if (paused == (bit<1>)1) {
-                // If paused, we send to CPU.
+                // If paused, we prep cpu header to send to CPU.
                 hdr.cpu.setValid();
                 hdr.cpu.ingress_port = (bit<16>)standard_metadata.ingress_port;
                 hdr.cpu.egress_port = (bit<16>)standard_metadata.egress_spec;
+                hdr.cpu.from_cpu = (bit<8>)0;
+
+                // Also, we need to mark on traffic map (DCFIT)
+                bit<32> traffic_map_index = (4 * (bit<32>)standard_metadata.egress_spec) + (bit<32>)standard_metadata.ingress_port - 1;
+                traffic_map.write(traffic_map_index, (bit<1>)1);
+                deq_qdepth.write(0, (bit<32>)standard_metadata.egress_spec);
+                deq_qdepth.write(1, (bit<32>)standard_metadata.ingress_port);
+
+                // Send to CPU
                 standard_metadata.egress_spec = CPU_PORT;
+
+              } else {
+                // If not paused, we need to unmark the traffic map if it is last packet
+
+                // First check if it has the cpu header.
+                if (standard_metadata.ingress_port == CPU_PORT && hdr.cpu.isValid()) {
+                  // If it does, then check if is_final is marked.
+                  if (hdr.cpu.is_final == (bit<8>)1) {
+                    // If is_final is marked, we need to unmark on the traffic map
+                    bit<32> traffic_map_index = (4 * (bit<32>)hdr.cpu.egress_port) + (bit<32>)hdr.cpu.ingress_port - 1;
+                    traffic_map.write(traffic_map_index, (bit<1>)0);
+
+                  }
+                  // Remember to set cpu header invalid
+                  hdr.cpu.setInvalid();
+                }
               }
             }
         }

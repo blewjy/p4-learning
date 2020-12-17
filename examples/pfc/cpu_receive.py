@@ -30,7 +30,7 @@ TYPE_RESUME = 0x1212
 
 class CpuHeader(Packet):
     name = 'CpuPacket'
-    fields_desc = [BitField("ingress_port",0,16), BitField("egress_port",0,16)]
+    fields_desc = [BitField("ingress_port",0,16), BitField("egress_port",0,16), BitField("is_final",0,8), BitField("from_cpu",0,8)]
 
 bind_layers(Ether, CpuHeader, type=TYPE_CUSTOM)
 bind_layers(Ether, CpuHeader, type=TYPE_PAUSE)
@@ -50,6 +50,11 @@ for iface in cpu_interfaces:
     cpu_buffer[iface] = {}
     cpu_buffer_size[iface] = 0
 
+# this dict counts the ingress-egress pairs
+cpu_ie_dict = {}
+for iface in cpu_interfaces:
+    cpu_ie_dict[iface] = {}
+
 def show_cpu_buffer():
     global cpu_buffer
     print "buffer size:", cpu_buffer_size
@@ -57,14 +62,14 @@ def show_cpu_buffer():
 def send_a_pause_packet(iface, ingress_port, egress_port):
     print "Sending a pause packet from {}, going out port {}".format(iface, ingress_port)
     pause_pkt = Ether(src=get_if_hwaddr(iface), dst="ff:ff:ff:ff:ff:ff", type=TYPE_PAUSE)
-    pause_pkt = pause_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port) / IP(dst=socket.gethostbyname("10.0.1.1")) / UDP(dport=1234, sport=4321) / "pause"
+    pause_pkt = pause_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port, from_cpu=1) / IP(dst=socket.gethostbyname("10.0.1.1")) / UDP(dport=1234, sport=4321) / "pause"
     pause_pkt.show2()
     sendp(pause_pkt, iface=iface, verbose=False)
 
 def send_a_resume_packet(iface, ingress_port, egress_port):
     print "Sending a resume packet from {}, going out port {}".format(iface, ingress_port)
     resume_pkt = Ether(src=get_if_hwaddr(iface), dst="ff:ff:ff:ff:ff:ff", type=TYPE_RESUME)
-    resume_pkt = resume_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port) / IP(dst=socket.gethostbyname("10.0.1.1")) / UDP(dport=1234, sport=4321) / "resume"
+    resume_pkt = resume_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port, from_cpu=1) / IP(dst=socket.gethostbyname("10.0.1.1")) / UDP(dport=1234, sport=4321) / "resume"
     resume_pkt.show2()
     sendp(resume_pkt, iface=iface, verbose=False)
 
@@ -73,7 +78,7 @@ def handle_pkt(pkt):
     iface = pkt.sniffed_on
     print "Controller got a packet on {}".format(iface)
 
-    if not pkt.haslayer(CpuHeader) or not pkt.haslayer(UDP) or pkt[Ether].src == get_if_hwaddr(iface):
+    if not pkt.haslayer(CpuHeader) or not pkt.haslayer(UDP) or pkt[Ether].src == get_if_hwaddr(iface) or pkt[CpuHeader].from_cpu == 1:
         print "...but packet is rejected!!"
         return
 
@@ -87,7 +92,14 @@ def handle_pkt(pkt):
 
     if pkt[Ether].type == TYPE_RESUME:
         for buffered_packet in cpu_buffer[iface][portno]:
+            ie_pair = (buffered_packet[CpuHeader].ingress_port, buffered_packet[CpuHeader].egress_port)
+            cpu_ie_dict[iface][ie_pair] -= 1
+            if cpu_ie_dict[iface][ie_pair] <= 0:
+                del cpu_ie_dict[iface][ie_pair]
+                buffered_packet[CpuHeader].is_final = 1
+            buffered_packet[CpuHeader].from_cpu = 1;
             sendp(buffered_packet, iface=iface, verbose=False)
+
         cpu_buffer_size[iface] -= len(cpu_buffer[iface][portno])
         del cpu_buffer[iface][portno][:]
         show_cpu_buffer()
@@ -96,12 +108,15 @@ def handle_pkt(pkt):
             send_a_resume_packet(iface, pkt[CpuHeader].ingress_port, pkt[CpuHeader].egress_port)
 
     else:
-        pkt2 = pkt.copy()
-        pkt2[Ether].remove_payload()
-        final_pkt = pkt2 / pkt[IP]
-        cpu_buffer[iface][portno].append(final_pkt)
+        cpu_buffer[iface][portno].append(pkt)
         cpu_buffer_size[iface] += 1
         show_cpu_buffer()
+
+        ie_pair = (pkt[CpuHeader].ingress_port, pkt[CpuHeader].egress_port)
+        if ie_pair in cpu_ie_dict[iface]:
+            cpu_ie_dict[iface][ie_pair] += 1
+        else:
+            cpu_ie_dict[iface][ie_pair] = 1
 
         if cpu_buffer_size[iface] >= BUFFER_PAUSE_THRESHOLD:
             send_a_pause_packet(iface, pkt[CpuHeader].ingress_port, pkt[CpuHeader].egress_port)

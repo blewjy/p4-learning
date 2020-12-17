@@ -69,7 +69,7 @@ class Sender(threading.Thread):
                 num_pkts_sent += 1
                 i += 1
                 print_state()
-                time.sleep(0.5)
+                time.sleep(0.1)
             else:
                 print "Sending is paused"
                 time.sleep(3)

@@ -1,0 +1,16 @@
+DCFIT:
+
+1. Implementing the port-based causality data structure (Traffic map)
+	- An NxN bit-map, which we will use registers to represent.
+	- We cannot create 2D register (or at least idk how), but we can do a simple 1D representation
+		- For mapping of ingress port X to egress port Y, formula for the index is [4(y-1) + x] - 1 = 4y + x - 5
+		- X and Y are 1-based, the actual index is 0-based.
+	- This traffic map acts upon each regular packet that comes in.
+	- So each time the packet comes in, it is processed and recognized by the switch.
+	- The switch will not edit the traffic map if the packet is just forwarded normally.
+	- Traffic map shall only be updated if the packet is forwarded to CPU, i.e. added to our switch buffer.
+	- Just before sending to CPU, switch will mark the traffic map for that ingress-egress port pair with 1.
+	- So even if multiple packets with the same pair is sent to CPU, that's fine, all will mark as 1.
+	- Then, when the packet comes back from the CPU and is ready to be sent out, we need to check if it is the last packet in the buffer.
+	- CPU header will contain a new bit that will indicate whether it is the last packet or not.
+	- If the packet to be sent out is in fact the last packet, then the switch will unmark the traffic map for that ingress-egress port pair.
