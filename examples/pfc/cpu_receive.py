@@ -74,7 +74,6 @@ def send_a_resume_packet(iface, ingress_port, egress_port):
     sendp(resume_pkt, iface=iface, verbose=False)
 
 def handle_pkt(pkt):
-
     iface = pkt.sniffed_on
     print "Controller got a packet on {}".format(iface)
 
@@ -123,9 +122,6 @@ def handle_pkt(pkt):
 
 
 def main():
-
-    
-
     global cpu_interfaces
     if len(sys.argv)>1:
         cpu_interfaces = sys.argv[1]
