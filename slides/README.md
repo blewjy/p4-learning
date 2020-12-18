@@ -1,12 +1,12 @@
 # Advanced Topics In Communication Networks Slides
 
 Here you can find the slides used during the master level course at ETH
-Zurich (Fall 2018). For more information visit the lecture's [website](https://adv-net.ethz.ch/).
+Zurich (Fall 2019). For more information visit the lecture's [website](https://adv-net.ethz.ch/2019/).
 
 #### Introduction: SDN history, developing P4
 
 * [Introduction to P4](./01_intro.pdf)
-* [Developing P4 Applications](./02_p4_Env.pdf)
+* [Developing P4 Applications](./02_p4_env.pdf)
 
 #### Stateful Programming and probabilistic data structures:
 
