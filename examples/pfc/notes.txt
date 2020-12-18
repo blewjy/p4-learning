@@ -3,7 +3,7 @@ DCFIT:
 1. Implementing the port-based causality data structure (Traffic map)
 	- An NxN bit-map, which we will use registers to represent.
 	- We cannot create 2D register (or at least idk how), but we can do a simple 1D representation
-		- For mapping of ingress port X to egress port Y, formula for the index is [4(y-1) + x] - 1 = 4y + x - 5
+		- For mapping of ingress port X to egress port Y, formula for the index is [MAX_PORTS*(y-1) + x] - 1
 		- X and Y are 1-based, the actual index is 0-based.
 	- This traffic map acts upon each regular packet that comes in.
 	- So each time the packet comes in, it is processed and recognized by the switch.
@@ -14,3 +14,18 @@ DCFIT:
 	- Then, when the packet comes back from the CPU and is ready to be sent out, we need to check if it is the last packet in the buffer.
 	- CPU header will contain a new bit that will indicate whether it is the last packet or not.
 	- If the packet to be sent out is in fact the last packet, then the switch will unmark the traffic map for that ingress-egress port pair.
+
+2. Implementing the checking message
+	- Checking messages are piggybacked onto pause frames.
+	- Reading each checking message will allow you to find out from exactly which switch and which port did that pause frame originate from.
+	- When checking message is sent from one switch port to its upstream, the upstream will store the checking message at that receive port.
+		- We can use a simple register for this, since only 1 checking message per port...?
+	- Then, that same receive port will check the traffic map to find if there are any ingress port with relation with itself.
+		- No for-loops in P4, so we might have to multicast this and perform this check at the egress.
+	- If it has relation, it means that there are some packets in the buffer which have this i2e pair.
+	- Then, those ports with relation, we check if we have paused the upstream
+	- If upstream has been paused, then the checking message should be forwarded on, with the same data.
+	Q: When should the stored checking messages at each port be cleared?
+	- When a resume frame is received on that port.
+	Q: What happens when a particular port receives 2 different checking messages (i.e. different originating switch or different sequence ID)?
+	- Just replace with the newer one.

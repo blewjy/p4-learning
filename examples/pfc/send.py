@@ -6,8 +6,13 @@ import random
 import struct
 
 from scapy.all import sendp, send, get_if_list, get_if_hwaddr, bind_layers
-from scapy.all import Packet
+from scapy.all import Packet, BitField
 from scapy.all import Ether, IP, UDP, TCP
+
+
+class DcfitHeader(Packet):
+    name = 'DcfitPacket'
+    fields_desc = [BitField("switch_id",0,6), BitField("port_id",0,6), BitField("sequence_id",0,4)]
 
 TYPE_CUSTOM = 0x1010
 TYPE_PAUSE = 0x1111
@@ -15,6 +20,9 @@ TYPE_RESUME = 0x1212
 bind_layers(Ether, IP, type=TYPE_CUSTOM)
 bind_layers(Ether, IP, type=TYPE_PAUSE)
 bind_layers(Ether, IP, type=TYPE_RESUME)
+
+bind_layers(Ether, DcfitHeader, type=TYPE_PAUSE)
+bind_layers(DcfitHeader, IP)
 
 def get_if():
     ifs=get_if_list()
@@ -42,13 +50,15 @@ def main():
 
     if sys.argv[2] == "pause":
         ethertype = TYPE_PAUSE
-    elif sys.argv[2] == "resume":
-        ethertype = TYPE_RESUME
+        pkt =  Ether(src=get_if_hwaddr(iface),dst = "00:00:00:00:01:12", type=ethertype)
+        pkt = pkt / DcfitHeader(switch_id=2, port_id=2, sequence_id=1) / IP(dst=addr)/ UDP(dport=1234, sport=random.randint(49152,65535)) / sys.argv[2]
     else:
-        ethertype = TYPE_CUSTOM
-
-    pkt =  Ether(src=get_if_hwaddr(iface),dst = "00:00:00:00:01:12", type=ethertype)
-    pkt = pkt /IP(dst=addr)/ UDP(dport=1234, sport=random.randint(49152,65535)) / sys.argv[2]
+        if sys.argv[2] == "resume":
+            ethertype = TYPE_RESUME
+        else:
+            ethertype = TYPE_CUSTOM
+        pkt =  Ether(src=get_if_hwaddr(iface),dst = "00:00:00:00:01:12", type=ethertype)
+        pkt = pkt /IP(dst=addr)/ UDP(dport=1234, sport=random.randint(49152,65535)) / sys.argv[2]
     pkt.show2()
     sendp(pkt, iface=iface, verbose=False)
 
