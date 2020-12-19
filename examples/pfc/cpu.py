@@ -28,7 +28,13 @@ TYPE_RESUME = 0x1212
 
 class CpuHeader(Packet):
     name = 'CpuPacket'
-    fields_desc = [BitField("ingress_port",0,16), BitField("egress_port",0,16), BitField("is_final",0,8), BitField("from_cpu",0,8)]
+    fields_desc = [
+                    BitField("ingress_port",0,16), 
+                    BitField("egress_port",0,16), 
+                    BitField("is_final_buffer",0,8), 
+                    BitField("is_final_flow",0,8), 
+                    BitField("from_cpu",0,8)
+                ]
 
 bind_layers(Ether, CpuHeader, type=TYPE_CUSTOM)
 bind_layers(Ether, CpuHeader, type=TYPE_PAUSE)
@@ -66,7 +72,6 @@ def show_cpu_buffer():
         print "{}:".format(iface)
         for i_port, buff in value.items():
             hostname_pkt_count = {}
-
             for p in buff:
                 src_host = ip_to_hostname[p[IP].src]
                 dst_host = ip_to_hostname[p[IP].dst]
@@ -75,7 +80,6 @@ def show_cpu_buffer():
                     hostname_pkt_count[key] = 1
                 else:
                     hostname_pkt_count[key] += 1
-
             print "\tPort {}:".format(i_port)
             for k, v in hostname_pkt_count.items():
                 print "\t\t{}: {}".format(k, v)
@@ -118,9 +122,20 @@ def handle_pkt(pkt):
         cpu_buffer[iface][i_port].append(pkt)
         show_cpu_buffer()
 
+        # Track the ingress-egress pair
+        ie_pair = (pkt[CpuHeader].ingress_port, pkt[CpuHeader].egress_port)
+        if ie_pair in cpu_ie_dict[iface]:
+            cpu_ie_dict[iface][ie_pair] += 1
+        else:
+            cpu_ie_dict[iface][ie_pair] = 1
+
         # If the ingress queue pass the threshold, we send pause packet upstream
         if len(cpu_buffer[iface][i_port]) >= BUFFER_PAUSE_THRESHOLD:
-            send_a_pause_packet(iface, i_port, e_port)
+            # Important: When you specify the ingress and egress port here, it shouldn't be the ingress and egress of the last packet that just triggered the pause threshold.
+            #            Rather, it should be the first packet that caused the sending to CPU from the switch in the first place.
+            #            This logic might change if we are doing the time-based artifical congestion instead.
+            first_pkt_in_buffer = cpu_buffer[iface][i_port][0]
+            send_a_pause_packet(iface, first_pkt_in_buffer[CpuHeader].ingress_port, first_pkt_in_buffer[CpuHeader].egress_port)
 
     elif pkt[Ether].type == TYPE_RESUME:
         """
@@ -128,6 +143,11 @@ def handle_pkt(pkt):
         However, our queues are ingress queues.
         This means that we have to loop through all the ingress queues, 
         then release packets sequentially from the front if their egress port is this resumed egress port
+
+        TODO: Nooooo... There's a slight problem here...
+              After you release the first packet that has egress port that is resumed, lets say the second packet egress port is not the resumed port,
+              but it's also not paused, then it should also be released. But now this CPU code doesn't know if that other egress port is paused or not...
+              So the best solution is to let CPU keep track of port's paused state.
         """
 
         # The resumed port is the ingress port of the resume packet
@@ -140,10 +160,18 @@ def handle_pkt(pkt):
                 if next_pkt[CpuHeader].egress_port == resumed_port:
                     resumed_pkt = buff.pop(0)
                     resumed_pkt[CpuHeader].from_cpu = 1;
+
                     if len(buff) <= 0:
-                        resumed_pkt[CpuHeader].is_final = 1;
+                        resumed_pkt[CpuHeader].is_final_buffer = 1;
                     else:
-                        resumed_pkt[CpuHeader].is_final = 0;
+                        resumed_pkt[CpuHeader].is_final_buffer = 0;
+
+                    ie_pair = (resumed_pkt[CpuHeader].ingress_port, resumed_pkt[CpuHeader].egress_port)
+                    cpu_ie_dict[iface][ie_pair] -= 1
+                    if cpu_ie_dict[iface][ie_pair] <= 0:
+                        del cpu_ie_dict[iface][ie_pair]
+                        resumed_pkt[CpuHeader].is_final_flow = 1
+
                     sendp(resumed_pkt, iface=iface, verbose=False)
 
                     show_cpu_buffer()
@@ -152,40 +180,6 @@ def handle_pkt(pkt):
 
             if len(buff) <= BUFFER_RESUME_THRESHOLD:
                 send_a_resume_packet(iface, port, resumed_port)
-
-
-
-
-    # if pkt[Ether].type == TYPE_RESUME:
-    #     for buffered_packet in cpu_buffer[iface][portno]:
-    #         ie_pair = (buffered_packet[CpuHeader].ingress_port, buffered_packet[CpuHeader].egress_port)
-    #         cpu_ie_dict[iface][ie_pair] -= 1
-    #         if cpu_ie_dict[iface][ie_pair] <= 0:
-    #             del cpu_ie_dict[iface][ie_pair]
-    #             buffered_packet[CpuHeader].is_final = 1
-    #         buffered_packet[CpuHeader].from_cpu = 1;
-    #         sendp(buffered_packet, iface=iface, verbose=False)
-
-    #     cpu_buffer_size[iface] -= len(cpu_buffer[iface][portno])
-    #     del cpu_buffer[iface][portno][:]
-    #     show_cpu_buffer()
-
-    #     if cpu_buffer_size[iface] <= BUFFER_RESUME_THRESHOLD:
-    #         send_a_resume_packet(iface, pkt[CpuHeader].ingress_port, pkt[CpuHeader].egress_port)
-
-    # else:
-    #     cpu_buffer[iface][portno].append(pkt)
-    #     cpu_buffer_size[iface] += 1
-    #     show_cpu_buffer()
-
-    #     ie_pair = (pkt[CpuHeader].ingress_port, pkt[CpuHeader].egress_port)
-    #     if ie_pair in cpu_ie_dict[iface]:
-    #         cpu_ie_dict[iface][ie_pair] += 1
-    #     else:
-    #         cpu_ie_dict[iface][ie_pair] = 1
-
-    #     if cpu_buffer_size[iface] >= BUFFER_PAUSE_THRESHOLD:
-    #         send_a_pause_packet(iface, pkt[CpuHeader].ingress_port, pkt[CpuHeader].egress_port)
 
 
 def main():

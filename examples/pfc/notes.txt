@@ -1,3 +1,18 @@
+Implementing a "fake" congestion:
+- Right now, the way we start the whole process that leads to a deadlock is by sending a pause packet from the host.
+- While this is in some sense a possible way a deadlock might form, another common way (perhaps more common) is the switch buffer itself is lagging and processing packets slowly, which causes it to send a pause packet back out the ingress port.
+- Maybe we can introduce some artificial delay in the switch buffer process to trigger pause packets directly from the switch itself.
+- This artificial delay will most likely have to be in our CPU, which is the switch buffer.
+- In order for regular packets to even go into the switch CPU in the first place, the ingress_buffering status on the switch has to be marked True.
+- So we have to somehow trigger the switch to mark ingress_buffering as True, before the switch will automatically forward packets to the buffer.
+- Possible approach:
+	- Allow user to control the CPU script such that we can trigger a custom packet to be sent down to a switch.
+	- Once switch receives this custom packet, it will set the specified ingress_buffering as True.
+	- At the same time, on the CPU side, a delay will be introduced for each packet that the ingress queue processes. This is so that the queue will accumulate.
+	- Subsequent regular packets that come into the switch will notice the ingress is bufferring, thus send the packet to CPU ingress buffer.
+	- Ultimately, the ingress buffer will accumulate and cross the threshold, triggering a pause frame to be sent upstream, originating from the switch itself.
+
+
 DCFIT:
 
 1. Implementing the port-based causality data structure (Traffic map)
