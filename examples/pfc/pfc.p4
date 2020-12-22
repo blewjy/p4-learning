@@ -191,15 +191,21 @@ control MyIngress(inout headers hdr,
           standard_metadata.egress_spec = (bit<9>)hdr.cpu.ingress_port;
 
           // Mark that we have paused the upstream
-          is_upstream_paused.write((bit<32>)hdr.cpu.ingress_port, (bit<1>)1);
+          is_upstream_paused.write((bit<32>)hdr.cpu.ingress_port - 1, (bit<1>)1);
 
           // Deactivate the cpu header
           hdr.cpu.setInvalid();
 
         } else {
-          // If it's not from CPU_PORT, then we mark this egress as paused and drop the packet. 
+          // If it's not from CPU_PORT, then we mark this egress as paused. 
           is_port_paused.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)1);
-          drop();
+          
+          // Then forward this packet to CPU to inform CPU that this port is paused.
+          send_to_cpu();
+
+          // Remember to disable DCFIT header
+          hdr.dcfit.setInvalid();
+
         }    
         
       } else if (hdr.ethernet.etherType == TYPE_RESUME) {
@@ -210,7 +216,7 @@ control MyIngress(inout headers hdr,
           standard_metadata.egress_spec = (bit<9>)hdr.cpu.ingress_port;
 
           // Mark that we have un-paused the upstream
-          is_upstream_paused.write((bit<32>)hdr.cpu.ingress_port, (bit<1>)0);
+          is_upstream_paused.write((bit<32>)hdr.cpu.ingress_port - 1, (bit<1>)0);
 
           // Deactivate the cpu header
           hdr.cpu.setInvalid();
@@ -223,7 +229,6 @@ control MyIngress(inout headers hdr,
           send_to_cpu();
         }
 
-        
 
       } else if (hdr.ethernet.etherType == TYPE_CUSTOM) {
 
@@ -235,7 +240,7 @@ control MyIngress(inout headers hdr,
 
           if (hdr.cpu.is_final == (bit<8>)1) {
             // If it is final, then we should mark the ingress as no longer buffering
-            is_ingress_buffering.write((bit<32>)hdr.cpu.ingress_port, (bit<1>)0);
+            is_ingress_buffering.write((bit<32>)hdr.cpu.ingress_port - 1, (bit<1>)0);
           }
 
           // Also, we should deactivate the cpu header
@@ -253,14 +258,14 @@ control MyIngress(inout headers hdr,
 
           // So first, we check if the ingress is buffering.
           bit<1> buffering;
-          is_ingress_buffering.read(buffering, (bit<32>)standard_metadata.ingress_port);
+          is_ingress_buffering.read(buffering, (bit<32>)standard_metadata.ingress_port - 1);
           if (buffering == (bit<1>)1) {
             // If it is buffering, then we send to the CPU buffer.
             send_to_cpu();  
 
             // Everytime we send a normal packet to CPU, CPU will add it to the ingress buffer.
             // So we need to note the ingress port that is buffering
-            is_ingress_buffering.write((bit<32>)standard_metadata.ingress_port, (bit<1>)1);
+            is_ingress_buffering.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)1);
           } else {
             // If it is not buffering (means there is no other packets in front of it), then we can handle normally.
 
@@ -272,7 +277,7 @@ control MyIngress(inout headers hdr,
               send_to_cpu();
 
               // Same thing here, note down that the ingress port is buffering
-              is_ingress_buffering.write((bit<32>)standard_metadata.ingress_port, (bit<1>)1);
+              is_ingress_buffering.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)1);
             }
           } 
         }
