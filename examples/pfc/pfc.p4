@@ -5,14 +5,17 @@
 #define CPU_PORT  24
 #define MAX_PORTS 4
 
-const bit<16> TYPE_IPV4   = 0x800;
-const bit<16> TYPE_CUSTOM = 0x1010;
-const bit<16> TYPE_PAUSE  = 0x1111;
-const bit<16> TYPE_RESUME = 0x1212;
+const bit<16> TYPE_IPV4    = 0x800;
+const bit<16> TYPE_CUSTOM  = 0x1010;
+const bit<16> TYPE_PAUSE   = 0x1111;
+const bit<16> TYPE_RESUME  = 0x1212;
+const bit<16> TYPE_BLOCK   = 0x1313;
+const bit<16> TYPE_RELEASE = 0x1414;
 
 register<bit<1>>(MAX_PORTS)           is_port_paused;
 register<bit<1>>(MAX_PORTS)           is_upstream_paused;
 register<bit<1>>(MAX_PORTS)           is_ingress_buffering;
+register<bit<1>>(MAX_PORTS)           is_port_blocked;
 register<bit<1>>(MAX_PORTS*MAX_PORTS) traffic_map;
 register<bit<6>>(MAX_PORTS)           switch_id_store;
 register<bit<6>>(MAX_PORTS)           port_id_store;
@@ -86,11 +89,13 @@ parser MyParser(packet_in packet,
     state start {
         packet.extract(hdr.ethernet);
         transition select(hdr.ethernet.etherType){
-            TYPE_IPV4: ipv4;
-            TYPE_CUSTOM: check_if_cpu;
-            TYPE_RESUME: check_if_cpu;
-            TYPE_PAUSE: check_if_dcfit;
-            default: accept;
+            TYPE_IPV4:    ipv4;
+            TYPE_CUSTOM:  check_if_cpu;
+            TYPE_RESUME:  check_if_cpu;
+            TYPE_PAUSE:   check_if_dcfit;
+            TYPE_BLOCK:   check_if_cpu;
+            TYPE_RELEASE: check_if_cpu;
+            default:      accept;
         }
     }
 
@@ -278,9 +283,33 @@ control MyIngress(inout headers hdr,
 
               // Same thing here, note down that the ingress port is buffering
               is_ingress_buffering.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)1);
+            } else {
+              // If the egress is not paused, then we must check if the egress is blocked.
+              bit<1> blocked;
+              is_port_blocked.read(blocked, (bit<32>)standard_metadata.egress_spec - 1);
+              if (blocked == (bit<1>)1) {
+                // If the egress is blocked, we also send to CPU to buffer.
+                send_to_cpu();
+
+                // Same thing here, note down that the ingress port is buffering
+                is_ingress_buffering.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)1);
+              }
             }
           } 
         }
+      } else if (hdr.ethernet.etherType == TYPE_BLOCK) {
+        // If it is a block packet, we just set our port blocked state (the target port is either hdr.cpu.ingress_port or hdr.cpu.egress_port, both same)
+        is_port_blocked.write((bit<32>)hdr.cpu.ingress_port - 1, (bit<1>)1);
+
+        // Then drop the packet
+        drop();
+
+      } else if (hdr.ethernet.etherType == TYPE_RELEASE) {
+        // If it is a release packet, we just unset our port blocked state (the target port is either hdr.cpu.ingress_port or hdr.cpu.egress_port, both same)
+        is_port_blocked.write((bit<32>)hdr.cpu.ingress_port - 1, (bit<1>)0);
+
+        // Then drop the packet
+        drop();
       }
     }
   }

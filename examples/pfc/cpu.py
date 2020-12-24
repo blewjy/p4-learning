@@ -7,6 +7,8 @@ This means that any regular packets that come into the CPU will definitely be st
 CPU will also store each packet according to the ingress port attribute (i.e. ingress queue).
 """
 
+import keyboard
+import threading
 import sys
 import struct
 import os
@@ -27,6 +29,8 @@ BUFFER_RESUME_THRESHOLD = 0
 TYPE_CUSTOM = 0x1010
 TYPE_PAUSE = 0x1111
 TYPE_RESUME = 0x1212
+TYPE_BLOCK = 0x1313
+TYPE_RELEASE = 0x1414
 
 class CpuHeader(Packet):
     name = 'CpuPacket'
@@ -35,10 +39,14 @@ class CpuHeader(Packet):
 bind_layers(Ether, CpuHeader, type=TYPE_CUSTOM)
 bind_layers(Ether, CpuHeader, type=TYPE_PAUSE)
 bind_layers(Ether, CpuHeader, type=TYPE_RESUME)
+bind_layers(Ether, CpuHeader, type=TYPE_BLOCK)
+bind_layers(Ether, CpuHeader, type=TYPE_RELEASE)
 bind_layers(CpuHeader, IP)
 bind_layers(Ether, IP, type=TYPE_CUSTOM)
 bind_layers(Ether, IP, type=TYPE_PAUSE)
 bind_layers(Ether, IP, type=TYPE_RESUME)
+bind_layers(Ether, IP, type=TYPE_BLOCK)
+bind_layers(Ether, IP, type=TYPE_RELEASE)
 
 # list of cpu interfaces
 cpu_interfaces = ['s1-cpu-eth1', 's2-cpu-eth1', 's3-cpu-eth1']
@@ -104,105 +112,221 @@ def show_cpu_state():
     print "Switch port blocked states:"
     print is_switch_port_blocked
 
-def send_a_pause_packet(iface, ingress_port, egress_port):
-    print "Sending a pause packet from {}, going out port {}".format(iface, ingress_port)
-    pause_pkt = Ether(src=get_if_hwaddr(iface), dst="ff:ff:ff:ff:ff:ff", type=TYPE_PAUSE)
-    pause_pkt = pause_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port, from_cpu=1) / IP(dst=socket.gethostbyname("10.0.1.1")) / UDP(dport=1234, sport=4321) / "pause"
-    pause_pkt.show2()
-    sendp(pause_pkt, iface=iface, verbose=False)
+    
+class Sniffer(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
 
-def send_a_resume_packet(iface, ingress_port, egress_port):
-    print "Sending a resume packet from {}, going out port {}".format(iface, ingress_port)
-    resume_pkt = Ether(src=get_if_hwaddr(iface), dst="ff:ff:ff:ff:ff:ff", type=TYPE_RESUME)
-    resume_pkt = resume_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port, from_cpu=1) / IP(dst=socket.gethostbyname("10.0.1.1")) / UDP(dport=1234, sport=4321) / "resume"
-    resume_pkt.show2()
-    sendp(resume_pkt, iface=iface, verbose=False)
+    def run(self):
+        global cpu_interfaces
+        if len(sys.argv)>1:
+            cpu_interfaces = sys.argv[1]
+        print "sniffing on %s" % cpu_interfaces
 
-def handle_pkt(pkt):
-    iface = pkt.sniffed_on
-    print "Controller got a packet on {}".format(iface)
+        sys.stdout.flush()
+        sniff(iface = cpu_interfaces,
+              prn = lambda x: self.handle_pkt(x))
 
-    if not pkt.haslayer(CpuHeader) or pkt[CpuHeader].from_cpu == 1:
-        print "...but packet is rejected!!"
-        return
+    def send_a_pause_packet(self, iface, ingress_port, egress_port):
+        print "Sending a pause packet from {}, going out port {}".format(iface, ingress_port)
+        pause_pkt = Ether(src=get_if_hwaddr(iface), dst="ff:ff:ff:ff:ff:ff", type=TYPE_PAUSE)
+        pause_pkt = pause_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port, from_cpu=1) / IP(dst=socket.gethostbyname("10.0.1.1")) / UDP(dport=1234, sport=4321) / "pause"
+        # pause_pkt.show2()
+        sendp(pause_pkt, iface=iface, verbose=False)
 
-    global cpu_buffer, is_switch_port_blocked, is_switch_port_paused
-    pkt.show2()
-    sys.stdout.flush()
+    def send_a_resume_packet(self, iface, ingress_port, egress_port):
+        print "Sending a resume packet from {}, going out port {}".format(iface, ingress_port)
+        resume_pkt = Ether(src=get_if_hwaddr(iface), dst="ff:ff:ff:ff:ff:ff", type=TYPE_RESUME)
+        resume_pkt = resume_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port, from_cpu=1) / IP(dst=socket.gethostbyname("10.0.1.1")) / UDP(dport=1234, sport=4321) / "resume"
+        # resume_pkt.show2()
+        sendp(resume_pkt, iface=iface, verbose=False)
 
-    i_port = pkt[CpuHeader].ingress_port
-    e_port = pkt[CpuHeader].egress_port
+    def handle_pkt(self, pkt):
+        iface = pkt.sniffed_on
+        print "\nController got a packet on {}".format(iface)
 
-    if pkt[Ether].type == TYPE_CUSTOM:
-        # Create the queue if there is none
-        if i_port not in cpu_buffer[iface]:
-            cpu_buffer[iface][i_port] = []
+        if not pkt.haslayer(CpuHeader) or pkt[CpuHeader].from_cpu == 1:
+            print "...but packet is rejected!!"
+            return
 
-        # Append the packet to the ingress queue
-        cpu_buffer[iface][i_port].append(pkt)
-        show_cpu_state()
+        global cpu_buffer, is_switch_port_blocked, is_switch_port_paused, show_cpu_state
+        # pkt.show2()
+        sys.stdout.flush()
 
-        # If the ingress queue pass the threshold, we send pause packet upstream
-        if len(cpu_buffer[iface][i_port]) >= BUFFER_PAUSE_THRESHOLD:
-            send_a_pause_packet(iface, i_port, e_port)
+        i_port = pkt[CpuHeader].ingress_port
+        e_port = pkt[CpuHeader].egress_port
 
-    elif pkt[Ether].type == TYPE_PAUSE:
-        """
-        If pause packet is forwarded to CPU from a switch, it is just to inform the CPU that this particular port has been paused.
-        Just note it down, then ignore packet.
-        """
+        if pkt[Ether].type == TYPE_CUSTOM:
+            # Create the queue if there is none
+            if i_port not in cpu_buffer[iface]:
+                cpu_buffer[iface][i_port] = []
 
-        # The paused port is the ingress port of the pause packet
-        paused_port = pkt[CpuHeader].ingress_port
+            # Append the packet to the ingress queue
+            cpu_buffer[iface][i_port].append(pkt)
 
-        # Simply mark as paused on our dict
-        is_switch_port_paused[iface][paused_port] = True
+            show_cpu_state()
 
-    elif pkt[Ether].type == TYPE_RESUME:
-        """
-        Each resume packet is for a particular egress port.
-        However, our queues are ingress queues.
-        This means that we have to loop through all the ingress queues, 
-        then release packets sequentially from the front if their egress port is not paused
-        """
+            # If the ingress queue pass the threshold, we send pause packet upstream
+            if len(cpu_buffer[iface][i_port]) >= BUFFER_PAUSE_THRESHOLD:
+                self.send_a_pause_packet(iface, i_port, e_port)
 
-        # The resumed port is the ingress port of the resume packet
-        resumed_port = pkt[CpuHeader].ingress_port
+        elif pkt[Ether].type == TYPE_PAUSE:
+            """
+            If pause packet is forwarded to CPU from a switch, it is just to inform the CPU that this particular port has been paused.
+            Just note it down, then ignore packet.
+            """
 
-        # Mark the port as resumed
-        is_switch_port_paused[iface][resumed_port] = False
+            # The paused port is the ingress port of the pause packet
+            paused_port = pkt[CpuHeader].ingress_port
 
-        # Loop through each ingress queue
-        for port, buff in cpu_buffer[iface].items():
-            while len(buff) > 0:
-                next_pkt = buff[0]
-                target_egress_port = buff[0][CpuHeader].egress_port
-                if not is_switch_port_paused[iface][target_egress_port]:
-                    resumed_pkt = buff.pop(0)
-                    resumed_pkt[CpuHeader].from_cpu = 1;
-                    if len(buff) <= 0:
-                        resumed_pkt[CpuHeader].is_final = 1;
+            # Simply mark as paused on our dict
+            is_switch_port_paused[iface][paused_port] = True
+
+        elif pkt[Ether].type == TYPE_RESUME:
+            """
+            Each resume packet is for a particular egress port.
+            However, our queues are ingress queues.
+            This means that we have to loop through all the ingress queues, 
+            then release packets sequentially from the front if their egress port is not paused and not blocked
+            """
+
+            # The resumed port is the ingress port of the resume packet
+            resumed_port = pkt[CpuHeader].ingress_port
+
+            # Mark the port as resumed
+            is_switch_port_paused[iface][resumed_port] = False
+
+            # Loop through each ingress queue
+            for port, buff in cpu_buffer[iface].items():
+                while len(buff) > 0:
+                    next_pkt = buff[0]
+                    target_egress_port = buff[0][CpuHeader].egress_port
+                    if not is_switch_port_paused[iface][target_egress_port] and not is_switch_port_blocked[iface][target_egress_port]:
+                        resumed_pkt = buff.pop(0)
+                        resumed_pkt[CpuHeader].from_cpu = 1;
+                        if len(buff) <= 0:
+                            resumed_pkt[CpuHeader].is_final = 1;
+                        else:
+                            resumed_pkt[CpuHeader].is_final = 0;
+                        sendp(resumed_pkt, iface=iface, verbose=False)
+
+                        show_cpu_state()
                     else:
-                        resumed_pkt[CpuHeader].is_final = 0;
-                    sendp(resumed_pkt, iface=iface, verbose=False)
+                        break
+
+                if len(buff) <= BUFFER_RESUME_THRESHOLD:
+                    self.send_a_resume_packet(iface, port, resumed_port)
+
+class Terminal(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+
+
+    def send_a_block_packet(self, iface, ingress_port, egress_port):
+        print "Sending a block packet down to {}".format(iface)
+        block_pkt = Ether(src=get_if_hwaddr(iface), dst="ff:ff:ff:ff:ff:ff", type=TYPE_BLOCK)
+        block_pkt = block_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port, from_cpu=1) / IP(dst=socket.gethostbyname("10.0.1.1")) / UDP(dport=1234, sport=4321) / "block"
+        # block_pkt.show2()
+        sendp(block_pkt, iface=iface, verbose=False)
+
+    def send_a_release_packet(self, iface, ingress_port, egress_port):
+        print "Sending a release packet down to {}".format(iface)
+        release_pkt = Ether(src=get_if_hwaddr(iface), dst="ff:ff:ff:ff:ff:ff", type=TYPE_RELEASE)
+        release_pkt = release_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port, from_cpu=1) / IP(dst=socket.gethostbyname("10.0.1.1")) / UDP(dport=1234, sport=4321) / "release"
+        # release_pkt.show2()
+        sendp(release_pkt, iface=iface, verbose=False)
+
+    def send_a_resume_packet(self, iface, ingress_port, egress_port):
+        print "Sending a resume packet from {}, going out port {}".format(iface, ingress_port)
+        resume_pkt = Ether(src=get_if_hwaddr(iface), dst="ff:ff:ff:ff:ff:ff", type=TYPE_RESUME)
+        resume_pkt = resume_pkt / CpuHeader(ingress_port=ingress_port, egress_port=egress_port, from_cpu=1) / IP(dst=socket.gethostbyname("10.0.1.1")) / UDP(dport=1234, sport=4321) / "resume"
+        # resume_pkt.show2()
+        sendp(resume_pkt, iface=iface, verbose=False)
+
+    def run(self):
+        global cpu_interfaces, show_cpu_state, is_switch_port_blocked, cpu_buffer
+        while True:
+            keyboard.wait("enter")
+            print ">",
+            raw_input() # this is to remove the first enter
+            command_args = raw_input().split()
+            if command_args[0] == "block":
+                intf_name = command_args[1] + "-cpu-eth1"
+                port_num = int(command_args[2])
+                if intf_name not in cpu_interfaces:
+                    print "Invalid switch name"
+                elif port_num < 1 or port_num > MAX_PORTS:
+                    print "Invalid port number"
+                else:
+                    print "Blocking {}-p{}".format(command_args[1], command_args[2])
+                    
+                    # Set the state on CPU side
+                    is_switch_port_blocked[intf_name][port_num] = True
+
+                    # Inform switch (ingress and egress port both same, indicates the target port)
+                    self.send_a_block_packet(intf_name, port_num, port_num)
 
                     show_cpu_state()
-                else:
-                    break
 
-            if len(buff) <= BUFFER_RESUME_THRESHOLD:
-                send_a_resume_packet(iface, port, resumed_port)
+            elif command_args[0] == "release":
+                intf_name = command_args[1] + "-cpu-eth1"
+                port_num = int(command_args[2])
+                if intf_name not in cpu_interfaces:
+                    print "Invalid switch name"
+                elif port_num < 1 or port_num > MAX_PORTS:
+                    print "Invalid port number"
+                else:
+                    print "Releasing {}-p{}".format(command_args[1], command_args[2])
+
+                    # Set the state on CPU side
+                    is_switch_port_blocked[intf_name][port_num] = False
+
+                    # Inform switch (ingress and egress port both same, indicates the target port)
+                    self.send_a_release_packet(intf_name, port_num, port_num)
+
+                    # Loop through each ingress queue
+                    for port, buff in cpu_buffer[iface].items():
+                        while len(buff) > 0:
+                            next_pkt = buff[0]
+                            target_egress_port = buff[0][CpuHeader].egress_port
+                            if not is_switch_port_paused[iface][target_egress_port] and not is_switch_port_blocked[iface][target_egress_port]:
+                                resumed_pkt = buff.pop(0)
+                                resumed_pkt[CpuHeader].from_cpu = 1;
+                                if len(buff) <= 0:
+                                    resumed_pkt[CpuHeader].is_final = 1;
+                                else:
+                                    resumed_pkt[CpuHeader].is_final = 0;
+                                sendp(resumed_pkt, iface=iface, verbose=False)
+
+                                show_cpu_state()
+                            else:
+                                break
+
+                        if len(buff) <= BUFFER_RESUME_THRESHOLD:
+                            self.send_a_resume_packet(iface, port, port_num)
+
+                    show_cpu_state()
+
+
+            else:
+                print "Invalid command"
 
 def main():
-    global cpu_interfaces
-    if len(sys.argv)>1:
-        cpu_interfaces = sys.argv[1]
-    print "sniffing on %s" % cpu_interfaces
-    
+    sniffer = Sniffer()
+    sniffer.daemon = True
+    sniffer.start()
 
-    sys.stdout.flush()
-    sniff(iface = cpu_interfaces,
-          prn = lambda x: handle_pkt(x))
+    terminal = Terminal()
+    terminal.daemon = True
+    terminal.start()
+
+    try:
+        while True:
+            time.sleep(100)
+    except KeyboardInterrupt:
+        raise
+    finally:
+        print "Exiting main thread"
 
 if __name__ == '__main__':
     main()

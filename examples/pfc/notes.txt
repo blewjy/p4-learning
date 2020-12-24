@@ -1,3 +1,28 @@
+
+
+
+Port "blocked" states:
+- Pause/Resume are PFC related states
+- I'm introducing a new state for each port, called the "blocked"/"unblocked" states.
+- This new state is purely for me to be able to control the buffer as I require, without using pause
+- An equivalent way of doing this is something like bringing a link down, or reducing the bandwidth of that link such that the buffer builds up in the switch.
+- The main purpose is to be able to control which port is "blocked", resulting in a build up in the switch buffer, and subsequently triggering a pause frame to originate from that switch
+- If I don't do this, then I have to find another way to trigger the pause frame sending.
+- The steps of blocking a port of a switch:
+	- The blocking starts from the CPU
+	- Once CPU of a switch knows that this port is blocked, he will mark on his state.
+	- Then, a packet is sent down to the switch to inform the switch which port is blocked.
+	- Switch will mark on his state as well, then drop that packet
+	- Each time a packet comes through and attempts to pass through the switch, switch must check if port is paused first. Pause takes priority over block.
+	- If port is not paused, then switch will check if that port is blocked. If that port is blocked, switch will also send packet to CPU.
+- The steps of releasing a port of a switch:
+	- The releasing also starts from the CPU
+	- Once CPU of the switch knows a port has been unblocked, he will mark on his state.
+	- Then the CPU will loop through all ingress queues, and release any packets that may be released.
+	- Then, a packet is sent down to the switch to inform the switch which port is unblocked.
+	- Switch will mark on his state as well, then drop that packet.
+
+
 DCFIT:
 
 1. Implementing the port-based causality data structure (Traffic map)
