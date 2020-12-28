@@ -34,7 +34,13 @@ TYPE_RELEASE = 0x1414
 
 class CpuHeader(Packet):
     name = 'CpuPacket'
-    fields_desc = [BitField("ingress_port",0,16), BitField("egress_port",0,16), BitField("is_final",0,8), BitField("from_cpu",0,8)]
+    fields_desc = [
+                    BitField("ingress_port",0,16), 
+                    BitField("egress_port",0,16), 
+                    BitField("is_final_buffer",0,8), 
+                    BitField("is_final_flow",0,8), 
+                    BitField("from_cpu",0,8)
+                ]
 
 bind_layers(Ether, CpuHeader, type=TYPE_CUSTOM)
 bind_layers(Ether, CpuHeader, type=TYPE_PAUSE)
@@ -149,7 +155,7 @@ class Sniffer(threading.Thread):
             print "...but packet is rejected!!"
             return
 
-        global cpu_buffer, is_switch_port_blocked, is_switch_port_paused, show_cpu_state
+        global cpu_buffer, cpu_ie_dict, is_switch_port_blocked, is_switch_port_paused, show_cpu_state
         # pkt.show2()
         sys.stdout.flush()
 
@@ -163,6 +169,13 @@ class Sniffer(threading.Thread):
 
             # Append the packet to the ingress queue
             cpu_buffer[iface][i_port].append(pkt)
+
+            # Track the ingress-egress pair
+            ie_pair = (i_port, e_port)
+            if ie_pair in cpu_ie_dict[iface]:
+                cpu_ie_dict[iface][ie_pair] += 1
+            else:
+                cpu_ie_dict[iface][ie_pair] = 1
 
             show_cpu_state()
 
@@ -205,9 +218,18 @@ class Sniffer(threading.Thread):
                         resumed_pkt = buff.pop(0)
                         resumed_pkt[CpuHeader].from_cpu = 1;
                         if len(buff) <= 0:
-                            resumed_pkt[CpuHeader].is_final = 1;
+                            resumed_pkt[CpuHeader].is_final_buffer = 1;
                         else:
-                            resumed_pkt[CpuHeader].is_final = 0;
+                            resumed_pkt[CpuHeader].is_final_buffer = 0;
+
+                        ie_pair = (resumed_pkt[CpuHeader].ingress_port, resumed_pkt[CpuHeader].egress_port)
+                        cpu_ie_dict[iface][ie_pair] -= 1
+                        if cpu_ie_dict[iface][ie_pair] <= 0:
+                            del cpu_ie_dict[iface][ie_pair]
+                            resumed_pkt[CpuHeader].is_final_flow = 1
+                        else:
+                            resumed_pkt[CpuHeader].is_final_flow = 0
+
                         sendp(resumed_pkt, iface=iface, verbose=False)
 
                         show_cpu_state()
@@ -285,25 +307,34 @@ class Terminal(threading.Thread):
                     self.send_a_release_packet(intf_name, port_num, port_num)
 
                     # Loop through each ingress queue
-                    for port, buff in cpu_buffer[iface].items():
+                    for port, buff in cpu_buffer[intf_name].items():
                         while len(buff) > 0:
                             next_pkt = buff[0]
                             target_egress_port = buff[0][CpuHeader].egress_port
-                            if not is_switch_port_paused[iface][target_egress_port] and not is_switch_port_blocked[iface][target_egress_port]:
+                            if not is_switch_port_paused[intf_name][target_egress_port] and not is_switch_port_blocked[intf_name][target_egress_port]:
                                 resumed_pkt = buff.pop(0)
                                 resumed_pkt[CpuHeader].from_cpu = 1;
                                 if len(buff) <= 0:
-                                    resumed_pkt[CpuHeader].is_final = 1;
+                                    resumed_pkt[CpuHeader].is_final_buffer = 1;
                                 else:
-                                    resumed_pkt[CpuHeader].is_final = 0;
-                                sendp(resumed_pkt, iface=iface, verbose=False)
+                                    resumed_pkt[CpuHeader].is_final_buffer = 0;
+
+                                ie_pair = (resumed_pkt[CpuHeader].ingress_port, resumed_pkt[CpuHeader].egress_port)
+                                cpu_ie_dict[intf_name][ie_pair] -= 1
+                                if cpu_ie_dict[intf_name][ie_pair] <= 0:
+                                    del cpu_ie_dict[intf_name][ie_pair]
+                                    resumed_pkt[CpuHeader].is_final_flow = 1
+                                else:
+                                    resumed_pkt[CpuHeader].is_final_flow = 0
+
+                                sendp(resumed_pkt, iface=intf_name, verbose=False)
 
                                 show_cpu_state()
                             else:
                                 break
 
                         if len(buff) <= BUFFER_RESUME_THRESHOLD:
-                            self.send_a_resume_packet(iface, port, port_num)
+                            self.send_a_resume_packet(intf_name, port, port_num)
 
                     show_cpu_state()
 

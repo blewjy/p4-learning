@@ -62,12 +62,14 @@ header dcfit_t {
 header cpu_t {
   bit<16> ingress_port;
   bit<16> egress_port;
-  bit<8>  is_final;
+  bit<8>  is_final_buffer;
+  bit<8>  is_final_flow;
   bit<8>  from_cpu;
 }
 
 struct metadata {
   /* empty */
+  bit<6> switch_id;
 }
 
 struct headers {
@@ -164,6 +166,13 @@ control MyIngress(inout headers hdr,
     standard_metadata.egress_spec = CPU_PORT;
   }
 
+  // [DCFIT]
+  action mark_on_traffic_map(bit<32> i_port, bit<32> e_port, bit<1> mark) {
+    bit<32> traffic_map_index = (MAX_PORTS * (e_port - 1)) + i_port - 1;
+    traffic_map.write(traffic_map_index, mark);
+  }
+  // [DCFIT]
+
   action ipv4_forward(macAddr_t dstAddr, egressSpec_t port) {
     hdr.ethernet.srcAddr = hdr.ethernet.dstAddr;
     hdr.ethernet.dstAddr = dstAddr;
@@ -184,8 +193,34 @@ control MyIngress(inout headers hdr,
     default_action = NoAction();
   }
 
+  action dcfit_attach_switch_id(bit<6> switch_id) {
+    hdr.dcfit.switch_id = switch_id;
+  }
+
+  table dcfit_attach_switch_id_table {
+    key = {
+      hdr.dcfit.isValid(): exact;
+    }
+    actions = {
+      dcfit_attach_switch_id;
+    }
+  }
+
+  action dcfit_check_switch_id(bit<6> switch_id) {
+    meta.switch_id = switch_id;
+  } 
+
+  table dcfit_check_switch_id_table {
+    key = {
+      hdr.dcfit.isValid(): exact;
+    }
+    actions = {
+      dcfit_check_switch_id;
+    }
+  }
+
   apply {
-    if (hdr.ipv4.isValid()){
+    if (hdr.ipv4.isValid()) {
       ipv4_lpm.apply();
 
       if (hdr.ethernet.etherType == TYPE_PAUSE) {
@@ -201,15 +236,94 @@ control MyIngress(inout headers hdr,
           // Deactivate the cpu header
           hdr.cpu.setInvalid();
 
+          // [DCFIT] Here, we need to append the DCFIT header.
+          // What goes into this DCFIT header will depend on the flow that triggered this pause packet, 
+          // i.e. that exact packet that crossed the buffer threshold and triggered this pause packet.
+          // We access this information via the CPU header, which contains the ingress and egress port information about that packet.
+
+          // First we activate the header.
+          hdr.dcfit.setValid();
+
+          // Then we should check if there is any stored information at that intended egress port of the packet.
+          bit<6> stored_switch_id;
+          switch_id_store.read(stored_switch_id, (bit<32>)hdr.cpu.egress_port - 1);
+          bit<6> stored_port_id;
+          port_id_store.read(stored_port_id, (bit<32>)hdr.cpu.egress_port - 1);
+          bit<4> stored_sequence_id;
+          sequence_id_store.read(stored_sequence_id, (bit<32>)hdr.cpu.egress_port - 1);
+
+          // If there is, we use it in our pause packet here.
+          // NOTE: The assumption here is that our switch and port ids will never be 0
+          if (stored_switch_id != (bit<6>)0 && stored_port_id != (bit<6>)0) {
+            hdr.dcfit.switch_id = stored_switch_id;
+            hdr.dcfit.port_id = stored_port_id;
+            hdr.dcfit.sequence_id = stored_sequence_id;
+          } else {
+            // Otherwise, we generate new information.
+            dcfit_attach_switch_id_table.apply(); // This will attach switch ID
+            hdr.dcfit.port_id = (bit<6>)hdr.cpu.ingress_port; // This port ID is the port which the pause packet is sent out of.
+            hdr.dcfit.sequence_id = (bit<4>)1;
+          }
+
+          // [DCFIT]
+
         } else {
           // If it's not from CPU_PORT, then we mark this egress as paused. 
           is_port_paused.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)1);
           
           // Then forward this packet to CPU to inform CPU that this port is paused.
-          send_to_cpu();
+          // send_to_cpu();
 
           // Remember to disable DCFIT header
-          hdr.dcfit.setInvalid();
+          // hdr.dcfit.setInvalid();
+
+          // [DCFIT]
+          // Whenever we receive a pause packet from a neighbouring switch, we have to do some checks.
+          // First, we must check if the switch ID received is the same switch ID as this switch.
+          // If it is the same, it means that this checking message was originated from here and is now back.
+          //   Then, we must check if the checking message's port number has any relation with the receive port.
+          //   If there is relation, then there's a potential deadlock.
+          // If the switch ID is not the same, then we first store this checking message at this receive port. 
+          //   Next, we must check which ports have relation with this port.
+          //   To do so, we need to use multicast
+          //   On the egress pipeline, if there is relation, then we must forward this packet.
+          dcfit_check_switch_id_table.apply();
+
+          if (hdr.dcfit.switch_id == meta.switch_id) {
+            // If it is the same, it means that this checking message was originated from here and is now back.
+            // Then, we must check if the checking message's port number has any relation with the receive port.
+            // If there is relation, then there's a potential deadlock.
+            // The relation is: this checking message's port is the ingress, and the receive port is the egress
+            bit<32> traffic_map_index = (MAX_PORTS * ((bit<32>)standard_metadata.ingress_port - 1)) + (bit<32>)hdr.dcfit.port_id - 1;
+            bit<1> marked;
+            traffic_map.read(marked, traffic_map_index);
+            if (marked == (bit<1>)1) {
+              // There is potential deadlock detected!
+              debugger.write(0, 1234);
+
+              drop();
+            } else {
+              // If there's no relation, then there shouldn't be any CBD along this checking message path.
+              // I think here we should proceed as a regular pause packet and forward to related ports like as if the switch_id is different?
+
+              switch_id_store.write((bit<32>)standard_metadata.ingress_port - 1, hdr.dcfit.switch_id);
+              port_id_store.write((bit<32>)standard_metadata.ingress_port - 1, hdr.dcfit.port_id);
+              sequence_id_store.write((bit<32>)standard_metadata.ingress_port - 1, hdr.dcfit.sequence_id);
+              standard_metadata.mcast_grp = 1;
+            }
+          } else {
+            // If the switch ID is not the same, then we first store this checking message at this receive port. 
+            switch_id_store.write((bit<32>)standard_metadata.ingress_port - 1, hdr.dcfit.switch_id);
+            port_id_store.write((bit<32>)standard_metadata.ingress_port - 1, hdr.dcfit.port_id);
+            sequence_id_store.write((bit<32>)standard_metadata.ingress_port - 1, hdr.dcfit.sequence_id);
+
+            // Next, we must check which ports have relation with this port.
+            // To do so, we need to use multicast
+            // On the egress pipeline, if there is relation, then we must forward this packet.
+            standard_metadata.mcast_grp = 1;
+          }
+
+          // [DCFIT]
 
         }    
         
@@ -243,10 +357,17 @@ control MyIngress(inout headers hdr,
         if (standard_metadata.ingress_port == CPU_PORT) {
           // If come from CPU_PORT, we should check if it is the final packet in that ingress buffer
 
-          if (hdr.cpu.is_final == (bit<8>)1) {
+          if (hdr.cpu.is_final_buffer == (bit<8>)1) {
             // If it is final, then we should mark the ingress as no longer buffering
             is_ingress_buffering.write((bit<32>)hdr.cpu.ingress_port - 1, (bit<1>)0);
           }
+
+          // [DCFIT] Also, we should check if this packet is the last packet for this ingress-egress pair
+          if (hdr.cpu.is_final_flow == (bit<8>)1) {
+            // If it is final, we should unmark in the traffic map.
+            mark_on_traffic_map((bit<32>)hdr.cpu.ingress_port, (bit<32>)hdr.cpu.egress_port, (bit<1>)0);
+          }
+          // [DCFIT]
 
           // Also, we should deactivate the cpu header
           hdr.cpu.setInvalid();
@@ -265,12 +386,19 @@ control MyIngress(inout headers hdr,
           bit<1> buffering;
           is_ingress_buffering.read(buffering, (bit<32>)standard_metadata.ingress_port - 1);
           if (buffering == (bit<1>)1) {
-            // If it is buffering, then we send to the CPU buffer.
-            send_to_cpu();  
+            // If it is buffering, then we send to the CPU buffer.  
 
             // Everytime we send a normal packet to CPU, CPU will add it to the ingress buffer.
             // So we need to note the ingress port that is buffering
             is_ingress_buffering.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)1);
+
+            // [DCFIT] Mark on the traffic map
+            mark_on_traffic_map((bit<32>)standard_metadata.ingress_port, (bit<32>)standard_metadata.egress_spec, (bit<1>)1);
+            // [DCFIT]
+
+            // Finally, send to cpu
+            send_to_cpu();
+
           } else {
             // If it is not buffering (means there is no other packets in front of it), then we can handle normally.
 
@@ -279,20 +407,34 @@ control MyIngress(inout headers hdr,
             is_port_paused.read(paused, (bit<32>)standard_metadata.egress_spec - 1);
             if (paused == (bit<1>)1) {
               // If the egress is paused, then we also send to CPU to buffer.
-              send_to_cpu();
 
               // Same thing here, note down that the ingress port is buffering
               is_ingress_buffering.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)1);
+
+              // [DCFIT] Mark on the traffic map
+              mark_on_traffic_map((bit<32>)standard_metadata.ingress_port, (bit<32>)standard_metadata.egress_spec, (bit<1>)1);
+              // [DCFIT]
+
+              // Finally, send to cpu
+              send_to_cpu();
+
             } else {
               // If the egress is not paused, then we must check if the egress is blocked.
               bit<1> blocked;
               is_port_blocked.read(blocked, (bit<32>)standard_metadata.egress_spec - 1);
+              
               if (blocked == (bit<1>)1) {
                 // If the egress is blocked, we also send to CPU to buffer.
-                send_to_cpu();
 
                 // Same thing here, note down that the ingress port is buffering
                 is_ingress_buffering.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)1);
+
+                // [DCFIT] Mark on the traffic map
+                mark_on_traffic_map((bit<32>)standard_metadata.ingress_port, (bit<32>)standard_metadata.egress_spec, (bit<1>)1);
+                // [DCFIT]
+
+                // Finally, send to cpu
+                send_to_cpu();
               }
             }
           } 
@@ -328,6 +470,44 @@ control MyEgress(inout headers hdr,
   }
 
   apply {
+    // [DCFIT]
+    if (hdr.ethernet.isValid() && hdr.ethernet.etherType == TYPE_PAUSE && standard_metadata.ingress_port != CPU_PORT && standard_metadata.mcast_grp == 1) {
+
+      // Out of all these multicasted pause frames, one of them is going to the CPU. We just let that one go
+      if (standard_metadata.egress_port == CPU_PORT) {
+        // All packets going to CPU will need the header
+        hdr.cpu.setValid();
+        hdr.cpu.ingress_port = (bit<16>)standard_metadata.ingress_port;
+        hdr.cpu.egress_port = (bit<16>)standard_metadata.egress_port;
+        hdr.cpu.from_cpu = (bit<8>)0;
+
+      } else {
+        // For the rest of each of these multicasted pause frames, we need to check if there are any relations with it.
+        // The standard_metadata.ingress_port (where the pause frame came into this switch), is the egress port of the actual flow.
+        // So we need to find if the current multicasted packet's egress port (i.e. standard_metadata.egress_port) is an ingress flow in this switch with egress of standard_metadata.ingress_port.
+        // Basically, the ports are kinda reversed.
+        bit<32> traffic_map_index = (MAX_PORTS * ((bit<32>)standard_metadata.ingress_port-1)) + (bit<32>)standard_metadata.egress_port - 1;
+        bit<1> traffic_map_mark;
+        traffic_map.read(traffic_map_mark, traffic_map_index);
+        if (traffic_map_mark == (bit<1>)1) {
+          // If there are related flows for this ingress-egress pair, then we need to check if upstream has been paused
+          bit<1> paused;
+          is_upstream_paused.read(paused, (bit<32>)standard_metadata.egress_port - 1);
+          if (paused == (bit<1>)0) {
+            // If upstream has not been paused, we drop the packet
+            drop();
+          }
+          // Otherwise, the pause packet will just be forwarded out this port.
+
+        } else {
+          // If there are no related flows for this ingress-egress pair, we just drop the packet.
+          drop();
+        }
+      }
+
+     
+    }
+    // [DCFIT]
   }
 }
 
