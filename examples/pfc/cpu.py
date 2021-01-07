@@ -183,6 +183,11 @@ class Sniffer(threading.Thread):
             if len(cpu_buffer[iface][i_port]) >= BUFFER_PAUSE_THRESHOLD:
                 self.send_a_pause_packet(iface, i_port, e_port)
 
+                # NOTE: Uncomment the next 2 lines and comment the line above and DCFIT will detect deadlock at the initial switch.
+                #       Otherwise, DCFIT will detect deadlock, but not guaranteed to be at the initial switch.
+                # first_pkt_in_buffer = cpu_buffer[iface][i_port][0]
+                # self.send_a_pause_packet(iface, first_pkt_in_buffer[CpuHeader].ingress_port, first_pkt_in_buffer[CpuHeader].egress_port)
+
         elif pkt[Ether].type == TYPE_PAUSE:
             """
             If pause packet is forwarded to CPU from a switch, it is just to inform the CPU that this particular port has been paused.

@@ -56,3 +56,14 @@ DCFIT:
 	- Just replace with the newer one.
 	Q: When a switch CPU creates a pause packet and wants to propagate it, we have to first check whether there is any stored checking message in any of the ingress ports, and whether we should use the stored checking message or create a new one. How should we decide this?
 	- Consider a fresh situation, where a pause packet is triggered for the very first time. This pause packet will be triggered by the fact that a packet was put into the ingress buffer, and crossed the threshold mark. Let this switch be s1, and the pause packet will be generated with brand new checking message details and push out the ingress port. This is clear. Then, suppose s2 is the upstream switch that received this pause packet. s2 will store the checking message details at that receive port, then mark it as paused, and its other ports which has flows towards this receive port will start to have their ingress buffers filling up. Let this receive port be port 1, and we have another two ports, port 2 and port 3. Suppose s2 has flows p2->p1 and p2->p3. Supposed p2 buffer fills up and the triggering packet is a packet from the p2->p1 .... ??? 
+
+3. Calculate how fast DCFIT detects deadlock
+	- How to calculate timing between deadlock formation and deadlock detection?
+	- First, let's pinpoint when is the exact time that these 2 events happen.
+	- For deadlock formation, a deadlock is said to be formed once all switches in the CBD are paused by their upstream.
+		- In our simple CBD topo, we block s3-p1, and the first pause packet is triggered from s3 towards s2.
+		- So, deadlock is formed the instant that s3 receives a pause packet from s1, which completes the CBD loop.
+		- 
+
+received: 08:23:29.535
+debugger: 08:23:29.535
