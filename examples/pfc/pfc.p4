@@ -287,11 +287,6 @@ control MyIngress(inout headers hdr,
           //   On the egress pipeline, if there is relation, then we must forward this packet.
           dcfit_check_switch_id_table.apply();
 
-          if (meta.switch_id == (bit<6>)3 && standard_metadata.ingress_port == 2 && hdr.dcfit.is_second_round == (bit<8>)0) {
-            debugger.write(0, standard_metadata.ingress_global_timestamp);
-          }
-
-
           if (hdr.dcfit.is_second_round == (bit<8>)1) {
 
             // For all second round packets, first we check if the switch ID is the same
@@ -330,7 +325,7 @@ control MyIngress(inout headers hdr,
               traffic_map.read(marked, traffic_map_index);
               if (marked == (bit<1>)1) {
                 // There is potential deadlock detected!
-                // debugger.write(1, standard_metadata.ingress_global_timestamp);
+                debugger.write(0, standard_metadata.ingress_global_timestamp);
 
                 // Now we use this packet to do the second round check.
                 standard_metadata.egress_spec = (bit<9>)hdr.dcfit.port_id;

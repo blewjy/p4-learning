@@ -1,5 +1,5 @@
 {
-  "program": "pfc.p4",
+  "program": "test.p4",
   "switch": "simple_switch",
   "compiler": "p4c",
   "options": "--target bmv2 --arch v1model --std p4-16",
@@ -25,29 +25,25 @@
     "object_name": "P4Mininet"
   },
   "topology": {
-    "links": [["h1", "s1"], ["h2", "s2"], ["h3", "s3"], ["s1", "s2"], ["s1", "s3"], ["s2", "s3"]],
+    "links": [["h1", "s1"], ["s1", "s2"], ["s1", "s3"], ["s2", "s3"]],
     "hosts": {
       "h1": {
-      },
-      "h2": {
-      },
-      "h3": {
       }
     },
     "switches": {
       "s1": {
-        "cli_input": "cbd-topo/s1-commands.txt",
-        "program": "pfc.p4",
+        "cli_input": "triangle-topo/s1-commands.txt",
+        "program": "test.p4",
         "cpu_port": true
       },
       "s2": {
-        "cli_input": "cbd-topo/s2-commands.txt",
-        "program": "pfc.p4",
+        "cli_input": "triangle-topo/s2-commands.txt",
+        "program": "test.p4",
         "cpu_port": true
       },
       "s3": {
-        "cli_input": "cbd-topo/s3-commands.txt",
-        "program": "pfc.p4",
+        "cli_input": "triangle-topo/s3-commands.txt",
+        "program": "test.p4",
         "cpu_port": true
       }
     }
