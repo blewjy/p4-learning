@@ -4,6 +4,7 @@
 
 #define CPU_PORT  24
 #define MAX_PORTS 4
+#define MAX_HOPS 9
 
 const bit<16> TYPE_IPV4    = 0x800;
 const bit<16> TYPE_CUSTOM  = 0x1010;
@@ -17,8 +18,6 @@ register<bit<1>>(MAX_PORTS)           is_upstream_paused;
 register<bit<1>>(MAX_PORTS)           is_ingress_buffering;
 register<bit<1>>(MAX_PORTS)           is_port_blocked;
 register<bit<1>>(MAX_PORTS*MAX_PORTS) traffic_map;
-register<bit<4>>(MAX_PORTS*MAX_PORTS) flow_counter;
-register<bit<4>>(MAX_PORTS)           buffer_counter;
 register<bit<48>>(2)                  debugger;
 
 /*************************************************************************
@@ -54,24 +53,35 @@ header ipv4_t {
 header fyp_t {
   bit<4>  switch_id;
   bit<4>  port_id;
+  bit<8>  trace_count;
+}
+
+header trace_t {
+  bit<8>  switch_id;
 }
 
 // only packets that are exchanged with CPU have this header.
 header cpu_t {
   bit<16> ingress_port;
   bit<16> egress_port;
+  bit<8>  is_final_buffer;
+  bit<8>  is_final_flow;
   bit<8>  from_cpu;
+  bit<8>  deadlock_detected;
+  bit<8>  trace_count;
 }
 
 struct metadata {
-  bit<4> switch_id;
+  bit<8>  parser_remaining;
+  bit<4>  switch_id;
 }
 
 struct headers {
-  ethernet_t  ethernet;
-  fyp_t       fyp;
-  cpu_t       cpu;
-  ipv4_t      ipv4;
+  ethernet_t        ethernet;
+  fyp_t             fyp;
+  trace_t[MAX_HOPS] traces;
+  cpu_t             cpu;
+  ipv4_t            ipv4;
 }
 
 /*************************************************************************
@@ -106,7 +116,20 @@ parser MyParser(packet_in packet,
 
     state fyp {
       packet.extract(hdr.fyp);
-      transition check_if_cpu;
+      meta.parser_remaining = hdr.fyp.trace_count;
+      transition select(meta.parser_remaining) {
+        0:       check_if_cpu;
+        default: trace;
+      }
+    }
+
+    state trace {
+      packet.extract(hdr.traces.next);
+      meta.parser_remaining = meta.parser_remaining - 1;
+      transition select(meta.parser_remaining) {
+        0:       check_if_cpu;
+        default: trace;
+      }
     }
 
     state check_if_cpu {
@@ -182,6 +205,13 @@ control MyIngress(inout headers hdr,
   }
 
   // [FYP]
+  action mark_on_traffic_map(bit<32> i_port, bit<32> e_port, bit<1> mark) {
+    bit<32> traffic_map_index = (MAX_PORTS * (e_port - 1)) + i_port - 1;
+    traffic_map.write(traffic_map_index, mark);
+  }
+  // [FYP]
+
+  // [FYP]
   action get_switch_id(bit<4> switch_id) {
     meta.switch_id = switch_id;
   }
@@ -236,7 +266,9 @@ control MyIngress(inout headers hdr,
           // This could be the final pause packet that causes the deadlock.
           // If it is, this would also be the switch that detects the deadlock.
           // We mark a timing here.
-          debugger.write(0, standard_metadata.ingress_global_timestamp);
+          if (meta.switch_id == (bit<4>)1) {
+            debugger.write(0, standard_metadata.ingress_global_timestamp);
+          }
           // [TEMP]
           
           // [FYP]
@@ -244,6 +276,12 @@ control MyIngress(inout headers hdr,
         } else {
           // If it's not from CPU_PORT, then we mark this egress as paused. 
           is_port_paused.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)1);
+
+          // Also add the switch trace
+          hdr.fyp.trace_count = hdr.fyp.trace_count + 1;
+          hdr.traces.push_front(1);
+          hdr.traces[0].setValid();
+          hdr.traces[0].switch_id = (bit<8>)meta.switch_id;
 
           // [FYP]
           // Each time we receive a pause packet from a neighbouring switch, we have to do some checks.
@@ -265,7 +303,12 @@ control MyIngress(inout headers hdr,
               // There is a deadlock detected!
               debugger.write(1, standard_metadata.ingress_global_timestamp);
 
-              drop();
+              hdr.fyp.setInvalid();
+
+              send_to_cpu();
+
+              hdr.cpu.trace_count = hdr.fyp.trace_count;
+              hdr.cpu.deadlock_detected = (bit<8>)1;
             } else {
               // If there's no relation, then there shouldn't be any CBD along this checking message path.
               // Proceed as a regular pause packet and multicast
@@ -312,34 +355,16 @@ control MyIngress(inout headers hdr,
 
         if (standard_metadata.ingress_port == CPU_PORT) {
 
-          // If come from CPU_PORT, we need to first decrement the counters
-          
-          // Decrement the buffer counter
-          bit<4> buffer_count;
-          buffer_counter.read(buffer_count, (bit<32>)hdr.cpu.ingress_port - 1);
-          buffer_count = buffer_count - 1;
-          buffer_counter.write((bit<32>)hdr.cpu.ingress_port - 1, buffer_count);
-
-          // Decrement the flow counter
-          bit<32> flow_counter_index = (MAX_PORTS * ((bit<32>)hdr.cpu.egress_port - 1)) + (bit<32>)hdr.cpu.ingress_port - 1;
-          bit<4> flow_count;
-          flow_counter.read(flow_count, flow_counter_index);
-          flow_count = flow_count - 1;
-          flow_counter.write(flow_counter_index, flow_count);
-
-          // Update traffic map
-          bit<32> traffic_map_index = (MAX_PORTS * ((bit<32>)hdr.cpu.egress_port - 1)) + (bit<32>)hdr.cpu.ingress_port - 1;
-          if (flow_count <= 0) {
-            traffic_map.write(traffic_map_index, (bit<1>)0);
-          } else {
-            traffic_map.write(traffic_map_index, (bit<1>)1);
+          if (hdr.cpu.is_final_buffer == (bit<8>)1) {
+            // If it is final, then we should mark the ingress as no longer buffering
+            is_ingress_buffering.write((bit<32>)hdr.cpu.ingress_port - 1, (bit<1>)0);
           }
 
-          // Then we check if this was the final packet in the buffer.
-          if (buffer_count <= (bit<4>)0) {
-            // If this was the final packet, then we should mark the ingress as no longer buffering.
-            is_ingress_buffering.write((bit<32>)hdr.cpu.ingress_port - 1, (bit<1>)0);
-          } 
+          // Also, we should check if this packet is the last packet for this ingress-egress pair
+          if (hdr.cpu.is_final_flow == (bit<8>)1) {
+            // If it is final, we should unmark in the traffic map.
+            mark_on_traffic_map((bit<32>)hdr.cpu.ingress_port, (bit<32>)hdr.cpu.egress_port, (bit<1>)0);
+          }
 
           // Also, we should deactivate the cpu header
           hdr.cpu.setInvalid();
@@ -358,28 +383,10 @@ control MyIngress(inout headers hdr,
           bit<1> buffering;
           is_ingress_buffering.read(buffering, (bit<32>)standard_metadata.ingress_port - 1);
           if (buffering == (bit<1>)1) {
-            // If it is buffering, we increment our counters
+            // If it is buffering, we need to append to the buffer
 
-            // Increment the buffer counter
-            bit<4> buffer_count;
-            buffer_counter.read(buffer_count, (bit<32>)standard_metadata.ingress_port - 1);
-            buffer_count = buffer_count + 1;
-            buffer_counter.write((bit<32>)standard_metadata.ingress_port - 1, buffer_count);
-
-            // Increment the flow counter
-            bit<32> flow_counter_index = (MAX_PORTS * ((bit<32>)standard_metadata.egress_spec - 1)) + (bit<32>)standard_metadata.ingress_port - 1;
-            bit<4> flow_count;
-            flow_counter.read(flow_count, flow_counter_index);
-            flow_count = flow_count + 1;
-            flow_counter.write(flow_counter_index, flow_count);
-
-            // Update traffic map
-            bit<32> traffic_map_index = (MAX_PORTS * ((bit<32>)hdr.cpu.egress_port - 1)) + (bit<32>)hdr.cpu.ingress_port - 1;
-            if (flow_count <= 0) {
-              traffic_map.write(traffic_map_index, (bit<1>)0);
-            } else {
-              traffic_map.write(traffic_map_index, (bit<1>)1);
-            }
+            // Mark the traffic map
+            mark_on_traffic_map((bit<32>)standard_metadata.ingress_port, (bit<32>)standard_metadata.egress_spec, (bit<1>)1);
 
             // Then we send to the CPU buffer.  
             send_to_cpu();
@@ -396,26 +403,8 @@ control MyIngress(inout headers hdr,
               // Same thing here, note down that the ingress port is buffering
               is_ingress_buffering.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)1);
 
-              // Increment the buffer counter
-              bit<4> buffer_count;
-              buffer_counter.read(buffer_count, (bit<32>)standard_metadata.ingress_port - 1);
-              buffer_count = buffer_count + 1;
-              buffer_counter.write((bit<32>)standard_metadata.ingress_port - 1, buffer_count);
-
-              // Increment the flow counter
-              bit<32> flow_counter_index = (MAX_PORTS * ((bit<32>)standard_metadata.egress_spec - 1)) + (bit<32>)standard_metadata.ingress_port - 1;
-              bit<4> flow_count;
-              flow_counter.read(flow_count, flow_counter_index);
-              flow_count = flow_count + 1;
-              flow_counter.write(flow_counter_index, flow_count);
-
-              // Update traffic map
-              bit<32> traffic_map_index = (MAX_PORTS * ((bit<32>)hdr.cpu.egress_port - 1)) + (bit<32>)hdr.cpu.ingress_port - 1;
-              if (flow_count <= 0) {
-                traffic_map.write(traffic_map_index, (bit<1>)0);
-              } else {
-                traffic_map.write(traffic_map_index, (bit<1>)1);
-              }
+              // Then mark on the traffic map
+              mark_on_traffic_map((bit<32>)standard_metadata.ingress_port, (bit<32>)standard_metadata.egress_spec, (bit<1>)1);
 
               // Finally, send to cpu
               send_to_cpu();
@@ -431,26 +420,8 @@ control MyIngress(inout headers hdr,
                 // Same thing here, note down that the ingress port is buffering
                 is_ingress_buffering.write((bit<32>)standard_metadata.ingress_port - 1, (bit<1>)1);
 
-                // Increment the buffer counter
-                bit<4> buffer_count;
-                buffer_counter.read(buffer_count, (bit<32>)standard_metadata.ingress_port - 1);
-                buffer_count = buffer_count + 1;
-                buffer_counter.write((bit<32>)standard_metadata.ingress_port - 1, buffer_count);
-
-                // Increment the flow counter
-                bit<32> flow_counter_index = (MAX_PORTS * ((bit<32>)standard_metadata.egress_spec - 1)) + (bit<32>)standard_metadata.ingress_port - 1;
-                bit<4> flow_count;
-                flow_counter.read(flow_count, flow_counter_index);
-                flow_count = flow_count + 1;
-                flow_counter.write(flow_counter_index, flow_count);
-
-                // Update traffic map
-                bit<32> traffic_map_index = (MAX_PORTS * ((bit<32>)hdr.cpu.egress_port - 1)) + (bit<32>)hdr.cpu.ingress_port - 1;
-                if (flow_count <= 0) {
-                  traffic_map.write(traffic_map_index, (bit<1>)0);
-                } else {
-                  traffic_map.write(traffic_map_index, (bit<1>)1);
-                }
+                // Then mark on the traffic map
+                mark_on_traffic_map((bit<32>)standard_metadata.ingress_port, (bit<32>)standard_metadata.egress_spec, (bit<1>)1);
 
                 // Finally, send to cpu
                 send_to_cpu();
@@ -498,6 +469,9 @@ control MyEgress(inout headers hdr,
         hdr.cpu.ingress_port = (bit<16>)standard_metadata.ingress_port;
         hdr.cpu.egress_port = (bit<16>)standard_metadata.egress_port;
         hdr.cpu.from_cpu = (bit<8>)0;
+
+        // And disable the fyp and traces header as well
+        hdr.fyp.setInvalid();
 
       } else {
         // For the rest of each of these multicasted pause frames, we need to check if there are any relations with it.
@@ -562,6 +536,7 @@ control MyDeparser(packet_out packet, in headers hdr) {
   apply {
     packet.emit(hdr.ethernet);
     packet.emit(hdr.fyp);
+    packet.emit(hdr.traces);
     packet.emit(hdr.cpu);
     packet.emit(hdr.ipv4);
   }

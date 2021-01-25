@@ -17,7 +17,7 @@ import time
 
 from scapy.all import sniff, sendp, hexdump, get_if_list, get_if_hwaddr, bind_layers
 from scapy.all import Packet, IPOption, Ether
-from scapy.all import ShortField, IntField, LongField, BitField, FieldListField, FieldLenField
+from scapy.all import ShortField, IntField, LongField, BitField, FieldListField, FieldLenField, PacketListField
 from scapy.all import IP, UDP, Raw, ls, TCP
 from scapy.layers.inet import _IPOption_HDR
 
@@ -32,12 +32,27 @@ TYPE_RESUME = 0x1212
 TYPE_BLOCK = 0x1313
 TYPE_RELEASE = 0x1414
 
+# class SwitchTrace(Packet):
+#     name = 'SwitchTrace'
+#     fields_desc = [ BitField("swid", 0,8) ]
+#     def extract_padding(self, p):
+#                 return "", p
+
 class CpuHeader(Packet):
     name = 'CpuPacket'
     fields_desc = [
                     BitField("ingress_port",0,16), 
-                    BitField("egress_port",0,16),
-                    BitField("from_cpu",0,8)
+                    BitField("egress_port",0,16), 
+                    BitField("is_final_buffer",0,8), 
+                    BitField("is_final_flow",0,8), 
+                    BitField("from_cpu",0,8),
+                    BitField("deadlock_detected",0,8),
+                    BitField("trace_count",0,8)
+                    # PacketListField("swtraces",
+                    #                 [],
+                    #                 SwitchTrace,
+                    #                 count_from=lambda pkt:pkt.trace_count
+                    #             )
                 ]
 
 bind_layers(Ether, CpuHeader, type=TYPE_CUSTOM)
@@ -154,8 +169,10 @@ class Sniffer(threading.Thread):
             return
 
         global cpu_buffer, cpu_ie_dict, is_switch_port_blocked, is_switch_port_paused, show_cpu_state
-        # pkt.show2()
-        # sys.stdout.flush()
+
+        if pkt[CpuHeader].deadlock_detected == 1:
+            pkt.show2()
+            sys.stdout.flush()
 
         i_port = pkt[CpuHeader].ingress_port
         e_port = pkt[CpuHeader].egress_port
@@ -180,6 +197,11 @@ class Sniffer(threading.Thread):
             # If the ingress queue pass the threshold, we send pause packet upstream
             if len(cpu_buffer[iface][i_port]) >= BUFFER_PAUSE_THRESHOLD:
                 self.send_a_pause_packet(iface, i_port, e_port)
+
+                # NOTE: Uncomment the next 2 lines and comment the line above and DCFIT will detect deadlock at the initial switch.
+                #       Otherwise, DCFIT will detect deadlock, but not guaranteed to be at the initial switch.
+                # first_pkt_in_buffer = cpu_buffer[iface][i_port][0]
+                # self.send_a_pause_packet(iface, first_pkt_in_buffer[CpuHeader].ingress_port, first_pkt_in_buffer[CpuHeader].egress_port)
 
         elif pkt[Ether].type == TYPE_PAUSE:
             """
@@ -215,12 +237,19 @@ class Sniffer(threading.Thread):
                     if not is_switch_port_paused[iface][target_egress_port] and not is_switch_port_blocked[iface][target_egress_port]:
                         resumed_pkt = buff.pop(0)
                         resumed_pkt[CpuHeader].from_cpu = 1;
+                        if len(buff) <= 0:
+                            resumed_pkt[CpuHeader].is_final_buffer = 1;
+                        else:
+                            resumed_pkt[CpuHeader].is_final_buffer = 0;
 
                         ie_pair = (resumed_pkt[CpuHeader].ingress_port, resumed_pkt[CpuHeader].egress_port)
                         cpu_ie_dict[iface][ie_pair] -= 1
                         if cpu_ie_dict[iface][ie_pair] <= 0:
                             del cpu_ie_dict[iface][ie_pair]
-                            
+                            resumed_pkt[CpuHeader].is_final_flow = 1
+                        else:
+                            resumed_pkt[CpuHeader].is_final_flow = 0
+
                         sendp(resumed_pkt, iface=iface, verbose=False)
 
                         show_cpu_state()
@@ -305,11 +334,18 @@ class Terminal(threading.Thread):
                             if not is_switch_port_paused[intf_name][target_egress_port] and not is_switch_port_blocked[intf_name][target_egress_port]:
                                 resumed_pkt = buff.pop(0)
                                 resumed_pkt[CpuHeader].from_cpu = 1;
+                                if len(buff) <= 0:
+                                    resumed_pkt[CpuHeader].is_final_buffer = 1;
+                                else:
+                                    resumed_pkt[CpuHeader].is_final_buffer = 0;
 
                                 ie_pair = (resumed_pkt[CpuHeader].ingress_port, resumed_pkt[CpuHeader].egress_port)
                                 cpu_ie_dict[intf_name][ie_pair] -= 1
                                 if cpu_ie_dict[intf_name][ie_pair] <= 0:
                                     del cpu_ie_dict[intf_name][ie_pair]
+                                    resumed_pkt[CpuHeader].is_final_flow = 1
+                                else:
+                                    resumed_pkt[CpuHeader].is_final_flow = 0
 
                                 sendp(resumed_pkt, iface=intf_name, verbose=False)
 
