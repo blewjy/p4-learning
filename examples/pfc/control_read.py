@@ -9,8 +9,8 @@ class Reader(object):
     def __init__(self):
         self.topo = Topology(db="topology.db")
         self.switches = ["s1", "s2", "s3"]
-        # self.registers = ["is_port_blocked", "is_port_paused", "is_upstream_paused", "traffic_map", "switch_id_store", "port_id_store", "sequence_id_store", "debugger"]
-        self.registers = ["debugger"]
+        self.registers = ["is_port_blocked", "is_port_paused", "is_upstream_paused", "flow_counter", "buffer_counter", "debugger"]
+        # self.registers = ["debugger"]
         self.controllers = {}
 
         self.init_controllers()
