@@ -32,11 +32,10 @@ TYPE_RESUME = 0x1212
 TYPE_BLOCK = 0x1313
 TYPE_RELEASE = 0x1414
 
-# class SwitchTrace(Packet):
-#     name = 'SwitchTrace'
-#     fields_desc = [ BitField("swid", 0,8) ]
-#     def extract_padding(self, p):
-#                 return "", p
+class SwitchTrace(Packet):
+    fields_desc = [ BitField("swid", 0,8) ]
+    def extract_padding(self, p):
+                return "", p
 
 class CpuHeader(Packet):
     name = 'CpuPacket'
@@ -47,12 +46,12 @@ class CpuHeader(Packet):
                     BitField("is_final_flow",0,8), 
                     BitField("from_cpu",0,8),
                     BitField("deadlock_detected",0,8),
-                    BitField("trace_count",0,8)
-                    # PacketListField("swtraces",
-                    #                 [],
-                    #                 SwitchTrace,
-                    #                 count_from=lambda pkt:pkt.trace_count
-                    #             )
+                    BitField("trace_count",0,8),
+                    PacketListField("swtraces",
+                                    [],
+                                    SwitchTrace,
+                                    count_from=lambda pkt:pkt.trace_count
+                                )
                 ]
 
 bind_layers(Ether, CpuHeader, type=TYPE_CUSTOM)
@@ -170,7 +169,7 @@ class Sniffer(threading.Thread):
 
         global cpu_buffer, cpu_ie_dict, is_switch_port_blocked, is_switch_port_paused, show_cpu_state
 
-        if pkt[CpuHeader].deadlock_detected == 1:
+        if pkt[CpuHeader].trace_count > 0:
             pkt.show2()
             sys.stdout.flush()
 

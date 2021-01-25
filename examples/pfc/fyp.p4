@@ -78,9 +78,9 @@ struct metadata {
 
 struct headers {
   ethernet_t        ethernet;
+  cpu_t             cpu;
   fyp_t             fyp;
   trace_t[MAX_HOPS] traces;
-  cpu_t             cpu;
   ipv4_t            ipv4;
 }
 
@@ -95,22 +95,41 @@ parser MyParser(packet_in packet,
 
     state start {
         packet.extract(hdr.ethernet);
-        transition select(hdr.ethernet.etherType){
+        transition select(hdr.ethernet.etherType) {
             TYPE_IPV4:    ipv4;
             TYPE_CUSTOM:  check_if_cpu;
             TYPE_RESUME:  check_if_cpu;
-            TYPE_PAUSE:   check_if_fyp;
+            TYPE_PAUSE:   check_if_cpu;
             TYPE_BLOCK:   check_if_cpu;
             TYPE_RELEASE: check_if_cpu;
             default:      accept;
         }
     }
 
+    state check_if_cpu {
+      transition select(standard_metadata.ingress_port) {
+        CPU_PORT: cpu;
+        default:  check_if_pause;
+      }
+    }
+
+    state cpu {
+      packet.extract(hdr.cpu);
+      transition ipv4;
+    }
+
+    state check_if_pause {
+      transition select(hdr.ethernet.etherType) {
+        TYPE_PAUSE: check_if_fyp;
+        default:    ipv4;
+      }
+    }
+
     // Pause frames will only contain fyp header if they did not come from CPU
     state check_if_fyp {
       transition select(standard_metadata.ingress_port) {
-        CPU_PORT: cpu;
-        default: fyp;
+        CPU_PORT: ipv4;
+        default:  fyp;
       }
     }
 
@@ -118,8 +137,8 @@ parser MyParser(packet_in packet,
       packet.extract(hdr.fyp);
       meta.parser_remaining = hdr.fyp.trace_count;
       transition select(meta.parser_remaining) {
-        0:       check_if_cpu;
-        default: trace;
+        0:       ipv4;
+        default: ipv4;
       }
     }
 
@@ -127,21 +146,9 @@ parser MyParser(packet_in packet,
       packet.extract(hdr.traces.next);
       meta.parser_remaining = meta.parser_remaining - 1;
       transition select(meta.parser_remaining) {
-        0:       check_if_cpu;
-        default: trace;
-      }
-    }
-
-    state check_if_cpu {
-      transition select(standard_metadata.ingress_port) {
-        CPU_PORT: cpu;
+        0:       ipv4;
         default: ipv4;
       }
-    }
-
-    state cpu {
-      packet.extract(hdr.cpu);
-      transition ipv4;
     }
 
     state ipv4 {
@@ -469,8 +476,9 @@ control MyEgress(inout headers hdr,
         hdr.cpu.ingress_port = (bit<16>)standard_metadata.ingress_port;
         hdr.cpu.egress_port = (bit<16>)standard_metadata.egress_port;
         hdr.cpu.from_cpu = (bit<8>)0;
+        hdr.cpu.trace_count = hdr.fyp.trace_count;
 
-        // And disable the fyp and traces header as well
+        // And disable the fyp header as well
         hdr.fyp.setInvalid();
 
       } else {
@@ -535,9 +543,9 @@ control MyComputeChecksum(inout headers hdr, inout metadata meta) {
 control MyDeparser(packet_out packet, in headers hdr) {
   apply {
     packet.emit(hdr.ethernet);
+    packet.emit(hdr.cpu);
     packet.emit(hdr.fyp);
     packet.emit(hdr.traces);
-    packet.emit(hdr.cpu);
     packet.emit(hdr.ipv4);
   }
 }
