@@ -3,8 +3,11 @@ table_add MyIngress.ipv4_lpm ipv4_forward 10.0.1.1/32 => c2:b9:09:cc:82:e0 2
 table_add MyIngress.ipv4_lpm ipv4_forward 10.0.2.2/32 => c2:b9:09:cc:82:e0 2
 table_add MyIngress.ipv4_lpm ipv4_forward 10.0.3.3/32 => 00:00:0a:00:03:03 1
 
-table_add MyIngress.get_switch_id_table get_switch_id 1 => 3
-table_add MyIngress.get_switch_id_table get_switch_id 0 => 3
+table_add MyIngress.dcfit_attach_switch_id_table dcfit_attach_switch_id 1 => 3
+table_add MyIngress.dcfit_attach_switch_id_table dcfit_attach_switch_id 0 => 3
+
+table_add MyIngress.dcfit_check_switch_id_table dcfit_check_switch_id 1 => 3
+table_add MyIngress.dcfit_check_switch_id_table dcfit_check_switch_id 0 => 3
 
 mc_mgrp_create 1
 

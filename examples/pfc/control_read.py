@@ -9,7 +9,6 @@ class Reader(object):
     def __init__(self):
         self.topo = Topology(db="topology.db")
         self.switches = ["s1", "s2", "s3"]
-        # self.registers = ["is_port_blocked", "is_port_paused", "is_upstream_paused", "flow_counter", "buffer_counter", "debugger"]
         self.registers = ["debugger"]
         self.controllers = {}
 
@@ -20,20 +19,17 @@ class Reader(object):
             self.controllers[s] = SimpleSwitchAPI(self.topo.get_thrift_port(s))
     
     def read(self):
-        while True:
-            print "\t",
+        print "\t",
+        for r in self.registers:
+            print "{}\t".format(r),
+        print ""
+        for s in self.switches:
+            print "pro-debug", s,
             for r in self.registers:
-                print "{}\t".format(r),
+                res = self.controllers[s].register_read(r);
+                print "\t{}".format(res),
             print ""
-            for s in self.switches:
-                print "pro-debug", s,
-                for r in self.registers:
-                    res = self.controllers[s].register_read(r);
-                    print "\t{}".format(res),
-                print ""
 
-            time.sleep(0.1)
-            return
 
 
 if __name__ == "__main__":
