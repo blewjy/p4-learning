@@ -287,15 +287,15 @@ class Terminal(threading.Thread):
     def run(self):
         global cpu_interfaces, show_cpu_state, is_switch_port_blocked, cpu_buffer
 
-        time.sleep(1)
+        # time.sleep(1)
 
-        # Set the state on CPU side
-        is_switch_port_blocked["s3-cpu-eth1"][1] = True
+        # # Set the state on CPU side
+        # is_switch_port_blocked["s3-cpu-eth1"][1] = True
 
-        # Inform switch (ingress and egress port both same, indicates the target port)
-        self.send_a_block_packet("s3-cpu-eth1", 1, 1)
+        # # Inform switch (ingress and egress port both same, indicates the target port)
+        # self.send_a_block_packet("s3-cpu-eth1", 1, 1)
         
-"""
+
 
         while True:
             keyboard.wait("enter")
@@ -371,7 +371,7 @@ class Terminal(threading.Thread):
 
             else:
                 print "Invalid command"
-"""
+
 
 def main():
     sniffer = Sniffer()
