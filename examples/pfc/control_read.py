@@ -26,14 +26,14 @@ class Reader(object):
                 print "{}\t".format(r),
             print ""
             for s in self.switches:
-                print s,
+                print "pro-debug", s,
                 for r in self.registers:
                     res = self.controllers[s].register_read(r);
                     print "\t{}".format(res),
                 print ""
 
             time.sleep(0.1)
-
+            return
 
 
 if __name__ == "__main__":

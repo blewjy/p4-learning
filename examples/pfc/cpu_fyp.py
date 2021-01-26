@@ -191,7 +191,7 @@ class Sniffer(threading.Thread):
             else:
                 cpu_ie_dict[iface][ie_pair] = 1
 
-            show_cpu_state()
+            # show_cpu_state()
 
             # If the ingress queue pass the threshold, we send pause packet upstream
             if len(cpu_buffer[iface][i_port]) >= BUFFER_PAUSE_THRESHOLD:
@@ -251,7 +251,7 @@ class Sniffer(threading.Thread):
 
                         sendp(resumed_pkt, iface=iface, verbose=False)
 
-                        show_cpu_state()
+                        # show_cpu_state()
                     else:
                         break
 
@@ -286,6 +286,17 @@ class Terminal(threading.Thread):
 
     def run(self):
         global cpu_interfaces, show_cpu_state, is_switch_port_blocked, cpu_buffer
+
+        time.sleep(1)
+
+        # Set the state on CPU side
+        is_switch_port_blocked["s3-cpu-eth1"][1] = True
+
+        # Inform switch (ingress and egress port both same, indicates the target port)
+        self.send_a_block_packet("s3-cpu-eth1", 1, 1)
+        
+"""
+
         while True:
             keyboard.wait("enter")
             print ">",
@@ -360,6 +371,7 @@ class Terminal(threading.Thread):
 
             else:
                 print "Invalid command"
+"""
 
 def main():
     sniffer = Sniffer()
