@@ -272,80 +272,14 @@ class Terminal(threading.Thread):
 
     def run(self):
         global cpu_interfaces, show_cpu_state, is_switch_port_blocked, cpu_buffer
-        while True:
-            keyboard.wait("enter")
-            print ">",
-            raw_input() # this is to remove the first enter
-            command_args = raw_input().split()
-            if command_args[0] == "block":
-                intf_name = command_args[1] + "-cpu-eth1"
-                port_num = int(command_args[2])
-                if intf_name not in cpu_interfaces:
-                    print "Invalid switch name"
-                elif port_num < 1 or port_num > MAX_PORTS:
-                    print "Invalid port number"
-                else:
-                    print "Blocking {}-p{}".format(command_args[1], command_args[2])
-                    
-                    # Set the state on CPU side
-                    is_switch_port_blocked[intf_name][port_num] = True
 
-                    # Inform switch (ingress and egress port both same, indicates the target port)
-                    self.send_a_block_packet(intf_name, port_num, port_num)
+        time.sleep(1)
 
-                    show_cpu_state()
+        # Set the state on CPU side
+        is_switch_port_blocked["s3-cpu-eth1"][1] = True
 
-            elif command_args[0] == "release":
-                intf_name = command_args[1] + "-cpu-eth1"
-                port_num = int(command_args[2])
-                if intf_name not in cpu_interfaces:
-                    print "Invalid switch name"
-                elif port_num < 1 or port_num > MAX_PORTS:
-                    print "Invalid port number"
-                else:
-                    print "Releasing {}-p{}".format(command_args[1], command_args[2])
-
-                    # Set the state on CPU side
-                    is_switch_port_blocked[intf_name][port_num] = False
-
-                    # Inform switch (ingress and egress port both same, indicates the target port)
-                    self.send_a_release_packet(intf_name, port_num, port_num)
-
-                    # Loop through each ingress queue
-                    for port, buff in cpu_buffer[intf_name].items():
-                        while len(buff) > 0:
-                            next_pkt = buff[0]
-                            target_egress_port = buff[0][CpuHeader].egress_port
-                            if not is_switch_port_paused[intf_name][target_egress_port] and not is_switch_port_blocked[intf_name][target_egress_port]:
-                                resumed_pkt = buff.pop(0)
-                                resumed_pkt[CpuHeader].from_cpu = 1;
-                                if len(buff) <= 0:
-                                    resumed_pkt[CpuHeader].is_final_buffer = 1;
-                                else:
-                                    resumed_pkt[CpuHeader].is_final_buffer = 0;
-
-                                ie_pair = (resumed_pkt[CpuHeader].ingress_port, resumed_pkt[CpuHeader].egress_port)
-                                cpu_ie_dict[intf_name][ie_pair] -= 1
-                                if cpu_ie_dict[intf_name][ie_pair] <= 0:
-                                    del cpu_ie_dict[intf_name][ie_pair]
-                                    resumed_pkt[CpuHeader].is_final_flow = 1
-                                else:
-                                    resumed_pkt[CpuHeader].is_final_flow = 0
-
-                                sendp(resumed_pkt, iface=intf_name, verbose=False)
-
-                                show_cpu_state()
-                            else:
-                                break
-
-                        if len(buff) <= BUFFER_RESUME_THRESHOLD:
-                            self.send_a_resume_packet(intf_name, port, port_num)
-
-                    show_cpu_state()
-
-
-            else:
-                print "Invalid command"
+        # Inform switch (ingress and egress port both same, indicates the target port)
+        self.send_a_block_packet("s3-cpu-eth1", 1, 1)
 
 def main():
     sniffer = Sniffer()
