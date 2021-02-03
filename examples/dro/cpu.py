@@ -67,15 +67,29 @@ bind_layers(Ether, IP, type=TYPE_BLOCK)
 bind_layers(Ether, IP, type=TYPE_RELEASE)
 
 # list of cpu interfaces
-cpu_interfaces = ['s1-cpu-eth1', 's2-cpu-eth1', 's3-cpu-eth1']
+cpu_interfaces = [
+    's1-cpu-eth1', 
+    's2-cpu-eth1', 
+    's3-cpu-eth1', 
+    's4-cpu-eth1', 
+    's5-cpu-eth1', 
+    's6-cpu-eth1', 
+    's7-cpu-eth1', 
+    's8-cpu-eth1', 
+    's9-cpu-eth1',
+    's10-cpu-eth1'
+]
 
 # mapping from IP to hostname (only for display purposes)
 ip_to_hostname = {
     "10.0.1.1": "h1",
-    "10.0.2.2": "h2",
-    "10.0.3.3": "h3",
-    "10.0.1.11": "h11",
-    "10.0.2.22": "h22"
+    "10.0.1.2": "h2",
+    "10.0.2.3": "h3",
+    "10.0.2.4": "h4",
+    "10.0.6.5": "h5",
+    "10.0.6.6": "h6",
+    "10.0.7.7": "h7",
+    "10.0.7.8": "h8"
 }
 
 # buffer stores mapping from port to array of packets
@@ -290,10 +304,10 @@ class Terminal(threading.Thread):
         time.sleep(1)
 
         # Set the state on CPU side
-        is_switch_port_blocked["s3-cpu-eth1"][1] = True
+        is_switch_port_blocked["s10-cpu-eth1"][1] = True
 
         # Inform switch (ingress and egress port both same, indicates the target port)
-        self.send_a_block_packet("s3-cpu-eth1", 1, 1)
+        self.send_a_block_packet("s10-cpu-eth1", 3, 3)
 
 def main():
     sniffer = Sniffer()

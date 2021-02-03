@@ -273,7 +273,7 @@ control MyIngress(inout headers hdr,
           // This could be the final pause packet that causes the deadlock.
           // If it is, this would also be the switch that detects the deadlock.
           // We mark a timing here.
-          if (meta.switch_id == (bit<4>)1) {
+          if (meta.switch_id == (bit<4>)4) {
             debugger.write(0, standard_metadata.ingress_global_timestamp);
           }
           // [TEMP]

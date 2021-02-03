@@ -38,8 +38,10 @@ if __name__ == "__main__":
 	            line = pipe.readline()
 	            if line == '': break
 	            else: 
+	            	if "pro-debug" in line:
+	            		print line
+	            		
 	            	if "pro-debug" in line and "s4" in line:
-	            		# print line
 	            		arr = line.replace("["," ").replace("]", " ").replace(","," ").split()
 	            		results.append((int(arr[-1]) - int(arr[-2]))/1000.0)
 
