@@ -1,0 +1,24 @@
+table_set_default ipv4_lpm drop
+table_add MyIngress.ipv4_lpm ipv4_forward 10.0.1.1/32 => d6:55:f8:ec:2a:7c 3
+table_add MyIngress.ipv4_lpm ipv4_forward 10.0.1.2/32 => d6:55:f8:ec:2a:7c 3
+table_add MyIngress.ipv4_lpm ipv4_forward 10.0.2.3/32 => d6:55:f8:ec:2a:7c 3
+table_add MyIngress.ipv4_lpm ipv4_forward 10.0.2.4/32 => d6:55:f8:ec:2a:7c 3
+table_add MyIngress.ipv4_lpm ipv4_forward 10.0.6.5/32 => 66:2d:39:0f:f5:20 1
+table_add MyIngress.ipv4_lpm ipv4_forward 10.0.6.6/32 => 66:2d:39:0f:f5:20 1
+table_add MyIngress.ipv4_lpm ipv4_forward 10.0.7.7/32 => 02:ac:16:41:a8:45 2
+table_add MyIngress.ipv4_lpm ipv4_forward 10.0.7.8/32 => 02:ac:16:41:a8:45 2
+
+table_add MyIngress.get_switch_id_table get_switch_id 1 => 9
+table_add MyIngress.get_switch_id_table get_switch_id 0 => 9
+
+mc_mgrp_create 1
+
+mc_node_create 0 1
+mc_node_create 0 2
+mc_node_create 0 3
+mc_node_create 0 24
+
+mc_node_associate 1 0
+mc_node_associate 1 1
+mc_node_associate 1 2
+mc_node_associate 1 3
