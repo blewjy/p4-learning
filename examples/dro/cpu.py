@@ -71,13 +71,7 @@ cpu_interfaces = [
     's1-cpu-eth1', 
     's2-cpu-eth1', 
     's3-cpu-eth1', 
-    's4-cpu-eth1', 
-    's5-cpu-eth1', 
-    's6-cpu-eth1', 
-    's7-cpu-eth1', 
-    's8-cpu-eth1', 
-    's9-cpu-eth1',
-    's10-cpu-eth1'
+    's4-cpu-eth1'
 ]
 
 # mapping from IP to hostname (only for display purposes)
@@ -304,10 +298,10 @@ class Terminal(threading.Thread):
         time.sleep(1)
 
         # Set the state on CPU side
-        is_switch_port_blocked["s10-cpu-eth1"][1] = True
+        is_switch_port_blocked["s3-cpu-eth1"][1] = True
 
         # Inform switch (ingress and egress port both same, indicates the target port)
-        self.send_a_block_packet("s10-cpu-eth1", 3, 3)
+        self.send_a_block_packet("s3-cpu-eth1", 1, 1)
 
 def main():
     sniffer = Sniffer()
